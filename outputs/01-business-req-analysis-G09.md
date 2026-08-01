@@ -141,6 +141,10 @@ The School of Computer Science needs this system to replace its current manual a
 
 12. Each space must have a unique space code.
 
+13. Only active accounts can book spaces.
+
+14. When a user change booking's time, its status shoule be pending again.
+
 ---
 
 ## 9. Assumptions and ambiguities
