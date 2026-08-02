@@ -18,7 +18,7 @@ erDiagram
     
     %% Updated Phase 2 Relationships
     ROLE ||--|{ USER : "assigned_to"
-    USAGE_POLICY |o--|{ SPACE : "applied_to"
+    USAGE_POLICY |o--o{ SPACE : "applied_to"
     ROLE }o--o{ USAGE_POLICY : "permitted_by"
     BOOKING }|--o{ ACKNOWLEDGEMENT : "requires"
     MAINTENANCE_RECORD ||--o| ACKNOWLEDGEMENT : "referenced_in"
