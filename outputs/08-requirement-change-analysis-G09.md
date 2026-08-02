@@ -34,8 +34,8 @@ To support the new Phase 2 requirements, the database schema must be updated wit
 ## 2. Affected Relationships
 The extraction of usage policies and the addition of acknowledgements require new structural relationships:
 
-*   **`SPACE` (OPTIONAL) and `USAGE_POLICY` (MANDATORY)** : Introduce a Many-to-Many (**M:N**) relationship. A space can have multiple usage policies, and a specific usage policy **MUST** be applied to at least one space.
-*   **`BOOKING` (OPTIONAL) and `ACKNOWLEDGEMENT` (MANDATORY)** : Introduce a One-to-Many (**1:N**) relationship. A single booking may require multiple acknowledgements, and an acknowledgement must belong to a booking.
+*   **`SPACE` (OPTIONAL) and `USAGE_POLICY` (MANDATORY)** : Introduce a Many-to-One (**N:1**) relationship. A space can have 0 or 1 usage policy, and a specific usage policy **MUST** be applied to at least one space.
+*   **`BOOKING` (OPTIONAL) and `ACKNOWLEDGEMENT` (MANDATORY)** : Introduce a Many-to-Many (**M:N**) relationship. A single booking may require some acknowledgements, and an acknowledgement must belong to some bookings.
 
 *   **`ACKNOWLEDGEMENT` (MANDATORY) and `MAINTENANCE_RECORD` (OPTIONAL)**: Introduce a One-to-One (**1:1**) relationship. An acknowledgement belong to a maintenance record.
 
