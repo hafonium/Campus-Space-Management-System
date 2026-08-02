@@ -2,6 +2,8 @@
 
 ## 1. Affected Entities and Attributes
 To support the new Phase 2 requirements, the database schema must be updated with new attributes and entities:
+*   **`USER`**
+    * **Action:** Extract attribute `role` into a standalone entity. 
 *   **`BOOKING`**
     * **Action:** Does not require decision_staff_id for an auto-approval booking.
 *   **`MAINTENANCE_RECORD`**: 
@@ -10,6 +12,11 @@ To support the new Phase 2 requirements, the database schema must be updated wit
 *   **`SPACE`**:
     *   **Action:** Re-evaluate the `space_type` attribute to designate which types are eligible for auto-approval.
     *   **Action:** Extract the `usage_policy` attribute and convert it into a standalone entity.
+*   **`ROLE`** (New Entity):
+    *   **Action:** Creat this entity to store roles for users and allow `USAGE_POLICY` to have multiple `allowed_roles` 
+    *   **Attributes:**
+        *   `role_id`: Unique identifier for the role.
+        *   `role_name`: e.g., "Staff", "Student".
 *   **`ACKNOWLEDGEMENT`** (New Entity):
     *   **Action:** Create this entity to store records of users acknowledging advisory maintenance warnings during the booking process.
         *   `acknowledgement_id`: Unique identifier for the record.
@@ -27,10 +34,14 @@ To support the new Phase 2 requirements, the database schema must be updated wit
 ## 2. Affected Relationships
 The extraction of usage policies and the addition of acknowledgements require new structural relationships:
 
-*   **`SPACE` (OPTIONAL) and `USAGE_POLICY` (MANDATORY)** : Introduce a Many-to-Many (**M:N**) relationship. A space can have multiple usage policies, and a specific usage policy **MUST** be applied to at least one space.
-*   **`BOOKING` (OPTIONAL) and `ACKNOWLEDGEMENT` (MANDATORY)** : Introduce a One-to-Many (**1:N**) relationship. A single booking may require multiple acknowledgements, and an acknowledgement must belong to a booking.
+*   **`SPACE` (OPTIONAL) and `USAGE_POLICY` (MANDATORY)** : Introduce a Many-to-One (**N:1**) relationship. A space can have 0 or 1 usage policy, and a specific usage policy **MUST** be applied to at least one space.
+*   **`BOOKING` (OPTIONAL) and `ACKNOWLEDGEMENT` (MANDATORY)** : Introduce a Many-to-Many (**M:N**) relationship. A single booking may require some acknowledgements, and an acknowledgement must belong to some bookings.
 
-*   **`ACKNOWLEDGEMENT` (MANDATORY) and `MAINTENANCE_RECORD` (OPTIONAL)**  (MANDATORY): Introduce a One-to-One (**1:1**) relationship. An acknowledgement belong to a maintenance record.
+*   **`ACKNOWLEDGEMENT` (MANDATORY) and `MAINTENANCE_RECORD` (OPTIONAL)**: Introduce a One-to-One (**1:1**) relationship. An acknowledgement belong to a maintenance record.
+
+*   **`ROLE` (MANDATORY) and `USER` (MANDATORY)**: Introduce a One-to-Many (**1:N**) relationship. A user must have a role and a role must belong to at least one user.
+
+*   **`ROLE` (OPTIONAL) and `USAGE_POLICY` (OPTIONAL)**: Introduce a Many-to-Many (**M:N**) relationship. A usage policy might only allow some specific roles or might not. A role does not have to be listed in a usage policy.
 
 ## 3. Business Rules 
 
