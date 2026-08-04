@@ -324,13 +324,16 @@ Ref: BOOKING_ACKNOWLEDGEMENT.acknowledgement_id > ACKNOWLEDGEMENT.acknowledgemen
 *Note: As Microsoft SQL Server (T-SQL) does not natively support the `ENUM` data type, categorical domains and scalar boundaries are explicitly enforced via single-row table `CHECK` constraints.*
 
 **USER Domain Checks:**
-* **`chk_user_role_domain`**: `CHECK ([role] IN ('student', 'lecturer', 'teaching_assistant', 'facility_staff', 'department_administrator', 'facility_manager'))`
 * **`chk_user_account_status_domain`**: `CHECK ([account_status] IN ('active', 'suspended', 'deactivated'))`
+* *(Note: Constraint for role is removed since now role is an entity.)*
 
 **SPACE Domain Checks:**
 * **`chk_space_type_domain`**: `CHECK ([space_type] IN ('auditorium', 'classroom', 'computer_lab', 'project_lab', 'meeting_room', 'student_workspace'))`
 * **`chk_space_capacity_boundary`**: `CHECK ([capacity] > 0)`
 * **`chk_space_current_status_domain`**: `CHECK ([current_status] IN ('available', 'in_use', 'under_maintenance', 'temporarily_closed', 'retired'))`
+
+**USAGE_POLICY Domain Checks (New for Phase 2):**
+* **`chk_usage_policy_max_duration_boundary`**: `CHECK ([max_duration_minutes] > 0)`
 
 **BOOKING Domain Checks:**
 * **`chk_booking_purpose_domain`**: `CHECK ([purpose] IN ('lecture', 'examination', 'seminar', 'workshop', 'meeting', 'student_activity', 'administrative_event'))`
@@ -338,7 +341,8 @@ Ref: BOOKING_ACKNOWLEDGEMENT.acknowledgement_id > ACKNOWLEDGEMENT.acknowledgemen
 * **`chk_booking_status_domain`**: `CHECK ([booking_status] IN ('pending', 'approved', 'rejected', 'cancelled', 'checked_in', 'completed', 'no_show'))`
 * **`chk_booking_time_order`**: `CHECK ([requested_start_time] < [requested_end_time])`
 * **`chk_booking_actual_time_order`**: `CHECK ([actual_start_time] IS NULL OR [actual_end_time] IS NULL OR [actual_start_time] < [actual_end_time])`
-* **`chk_booking_decision_fields`**: `CHECK ([booking_status] NOT IN ('approved', 'rejected') OR ([decision_staff_id] IS NOT NULL AND [decision_time] IS NOT NULL AND [decision_note] IS NOT NULL))`
+* **`chk_booking_decision_fields`**: `CHECK ([booking_status] NOT IN ('rejected') OR ([decision_staff_id] IS NOT NULL AND [decision_time] IS NOT NULL AND [decision_note] IS NOT NULL))` 
+  *(Note: when status is 'approved', which equas to auto-approval, `decision_staff_id` can be NULL)*
 * **`chk_booking_rejection_reason`**: `CHECK ([booking_status] <> 'rejected' OR [rejection_reason] IS NOT NULL)`
 * **`chk_booking_checkin_fields`**: `CHECK ([booking_status] NOT IN ('checked_in', 'completed') OR ([check_in_staff_id] IS NOT NULL AND [actual_start_time] IS NOT NULL AND [initial_condition] IS NOT NULL))`
 * **`chk_booking_completion_fields`**: `CHECK ([booking_status] <> 'completed' OR ([completion_staff_id] IS NOT NULL AND [actual_end_time] IS NOT NULL AND [final_condition] IS NOT NULL AND [usage_notes] IS NOT NULL))`
@@ -346,3 +350,4 @@ Ref: BOOKING_ACKNOWLEDGEMENT.acknowledgement_id > ACKNOWLEDGEMENT.acknowledgemen
 **MAINTENANCE_RECORD Domain Checks:**
 * **`chk_maintenance_status_domain`**: `CHECK ([status] IN ('reported', 'in_progress', 'completed'))`
 * **`chk_maintenance_time_order`**: `CHECK ([completion_time] IS NULL OR [start_time] < [completion_time])`
+* **`chk_maintenance_impact_level_domain`**: `CHECK ([impact_level] IN ('out-of-service', 'advisory'))`
