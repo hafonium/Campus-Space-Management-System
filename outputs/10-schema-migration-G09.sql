@@ -51,7 +51,8 @@ CREATE TABLE dbo.USAGE_POLICY (
     max_duration_minutes INT NULL,
     requires_business_hours BIT NULL,
     department_allowed VARCHAR(255) NULL,
-    CONSTRAINT pk_usage_policy PRIMARY KEY (policy_id)
+    CONSTRAINT pk_usage_policy PRIMARY KEY (policy_id),
+    CONSTRAINT chk_usage_policy_max_duration_boundary CHECK ([max_duration_minutes] > 0)
 );
 GO
 
@@ -75,7 +76,7 @@ FROM dbo.[USER] u
 JOIN dbo.ROLE r ON u.role = r.role_name;
 GO
 
--- 4. Enforce NOT NULL and drop the old text column
+-- 4. Enforce NOT NULL and drop the old text column & constraint
 ALTER TABLE dbo.[USER] ALTER COLUMN role_id INT NOT NULL;
 ALTER TABLE dbo.[USER] DROP CONSTRAINT chk_user_role_domain;
 ALTER TABLE dbo.[USER] DROP COLUMN [role];
@@ -89,15 +90,7 @@ ALTER TABLE dbo.BOOKING DROP CONSTRAINT chk_booking_decision_fields;
 GO
 ALTER TABLE dbo.BOOKING ADD CONSTRAINT chk_booking_decision_fields
 CHECK (
-    (booking_status NOT IN ('approved', 'rejected'))
-    OR
-    (booking_status = 'rejected' AND decision_staff_id IS NOT NULL AND decision_time IS NOT NULL AND decision_note IS NOT NULL)
-    OR
-    (booking_status = 'approved' AND (
-        (decision_staff_id IS NULL AND decision_time IS NULL AND decision_note IS NULL) 
-        OR 
-        (decision_staff_id IS NOT NULL AND decision_time IS NOT NULL AND decision_note IS NOT NULL)
-    ))
+    ([booking_status] NOT IN ('rejected') OR ([decision_staff_id] IS NOT NULL AND [decision_time] IS NOT NULL AND [decision_note] IS NOT NULL))
 );
 GO
 
@@ -114,7 +107,7 @@ GO
 ALTER TABLE dbo.MAINTENANCE_RECORD ALTER COLUMN impact_level VARCHAR(50) NOT NULL;
 GO
 ALTER TABLE dbo.MAINTENANCE_RECORD 
-    ADD CONSTRAINT chk_mr_impact_level 
+    ADD CONSTRAINT chk_maintenance_impact_level_domain 
     CHECK (impact_level IN ('out-of-service', 'advisory'));
 GO
 
