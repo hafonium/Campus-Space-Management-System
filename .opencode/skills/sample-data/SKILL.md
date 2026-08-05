@@ -85,3 +85,42 @@ Before finishing, read `references/sample-data-review-checklist.md` and verify:
 - insertion order respects all Foreign Key dependencies.
 - the data is realistic and avoids lazy placeholder text.
 - both normal and exceptional scenarios are explicitly covered.
+
+## High-volume generation mode
+
+Use high-volume mode when the requested BOOKING population is 100,000 rows
+or more.
+
+In this mode:
+
+- Generate a parameterized T-SQL data-generation program, not one literal
+  INSERT per row.
+- Use deterministic set-based generation with a fixed seed.
+- Target the Phase 2 schema after the schema migration has been applied.
+- Generate at least three complete academic years.
+- Stage and validate data before loading it into the target tables.
+- Generate cancellations, no-shows, maintenance records, advisory maintenance,
+  acknowledgements, and booking-acknowledgement links.
+- Provide executable assertions and negative tests.
+- Provide before-and-after index benchmarks.
+- Do not mark the task complete merely because the SQL compiles.
+- The task is complete only after all assertions pass against SQL Server.
+
+### Required scale parameters
+
+The generated script must support:
+
+- 100,000 bookings by default
+- up to 500,000 bookings without changing the SQL source
+- a deterministic seed
+- configurable academic-year start
+- configurable batch size
+
+### Performance restrictions
+
+Do not:
+
+- emit hundreds of thousands of literal VALUES clauses
+- use a cursor for large table generation
+- execute one INSERT per generated booking
+- benchmark indexed queries without first capturing an unindexed baseline
