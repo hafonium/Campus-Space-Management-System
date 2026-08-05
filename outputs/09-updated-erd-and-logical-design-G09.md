@@ -5,60 +5,46 @@ Copy the code below and paste it into a live editor like Mermaid Live to view th
 
 ```mermaid
 erDiagram
-    %% Existing Phase 1 Relationships
-    USER ||--o{ BOOKING : "submits"
-    USER |o--o{ BOOKING : "decides_on"
-    USER |o--o{ BOOKING : "checks_in"
-    USER |o--o{ BOOKING : "completes"
-    SPACE ||--o{ BOOKING : "hosts"
-    USER ||--o{ MAINTENANCE_RECORD : "reports"
-    USER |o--o{ MAINTENANCE_RECORD : "assigned_to"
-    SPACE ||--o{ MAINTENANCE_RECORD : "undergoes"
-    SPACE |o--o{ FACILITY : "contains"
-    
-    %% Updated Phase 2 Relationships
-    ROLE ||--|{ USER : "assigned_to"
-    USAGE_POLICY |o--o{ SPACE : "applied_to"
-    ROLE }o--o{ USAGE_POLICY : "permitted_by"
-    BOOKING }|--o{ ACKNOWLEDGEMENT : "requires"
-    MAINTENANCE_RECORD ||--o| ACKNOWLEDGEMENT : "referenced_in"
-
     ROLE {
-        int role_id PK
-        string role_name
+        integer role_id PK
+        string role_name 
     }
-
     USER {
-        int user_id PK
+        integer user_id PK
         string full_name
         string email
         string phone_number
         string department
         string account_status
     }
-
+    USAGE_POLICY {
+        integer policy_id PK
+        string policy_name
+        integer max_duration_minutes
+        boolean requires_business_hours
+        string department_allowed
+        string legacy_policy_text
+    }
     SPACE {
         string space_code PK
         string space_name
         string space_type
         string building
-        int floor
+        integer floor
         string room_number
-        int capacity
+        integer capacity
         string current_status
     }
-
     FACILITY {
-        int facility_id PK
+        integer facility_id PK
         string facility_name
     }
-
     BOOKING {
-        int booking_id PK
+        integer booking_id PK
         datetime requested_start_time
         datetime requested_end_time
         string purpose
-        int expected_participants
+        integer expected_participants
         string booking_status
         datetime decision_time
         string decision_note
@@ -69,9 +55,8 @@ erDiagram
         string final_condition
         string usage_notes
     }
-
     MAINTENANCE_RECORD {
-        int maintenance_id PK
+        integer maintenance_id PK
         string problem_description
         datetime start_time
         datetime completion_time
@@ -79,18 +64,24 @@ erDiagram
         string result_note
         string impact_level
     }
-    
-    USAGE_POLICY {
-        int policy_id PK
-        string policy_name
-        int max_duration_minutes
-        boolean requires_business_hours
-        string department_allowed
-    }
-    
     ACKNOWLEDGEMENT {
-        int acknowledgement_id PK
+        datetime acknowledged_at
     }
+
+    ROLE ||--|{ USER : assigned_to
+    ROLE }o--o{ USAGE_POLICY : permitted_by
+    USAGE_POLICY o|--|{ SPACE : applied_to
+    SPACE o|--o{ FACILITY : contains
+    SPACE ||--o{ BOOKING : hosts
+    USER ||--o{ BOOKING : submits
+    USER o|--o{ BOOKING : decides_on
+    USER o|--o{ BOOKING : checks_in
+    USER o|--o{ BOOKING : completes
+    SPACE ||--o{ MAINTENANCE_RECORD : undergoes
+    USER ||--o{ MAINTENANCE_RECORD : reports
+    USER o|--o{ MAINTENANCE_RECORD : assigned_to
+    BOOKING ||--o{ ACKNOWLEDGEMENT : records
+    MAINTENANCE_RECORD ||--o{ ACKNOWLEDGEMENT : concerns
 ```
 
 ### Conceptual Data Dictionary
@@ -148,8 +139,9 @@ erDiagram
     *   `max_duration_minutes` — int
     *   `requires_business_hours` — boolean
     *   `department_allowed` — string
+    *   `legacy_policy_text` — nullable string containing the preserved Phase 1 free-text usage policy; it is retained for migration traceability and is not evaluated as an auto-approval condition
 *   **ACKNOWLEDGEMENT**
-    *   `acknowledgement_id` (PK) — int
+    *   `acknowledged_at` — datetime
 
 #### Relationship Summary
 
@@ -167,8 +159,8 @@ erDiagram
 | SPACE | 1 : N | FACILITY | contains | Space optional; Facility optional | Each space may contain zero or many facilities; each facility may exist in at most one space. |
 | USAGE_POLICY | 1 : N | SPACE | applied_to | Policy optional; Space mandatory | A space can have 0 or 1 usage policy, and a specific usage policy must be applied to at least one space. |
 | ROLE | M : N | USAGE_POLICY | permitted_by | Role optional; Policy optional | A usage policy might only allow some specific roles or might not, and a role does not have to be listed in a usage policy. |
-| BOOKING | M : N | ACKNOWLEDGEMENT | requires | Booking mandatory; Ack optional | A single booking may require zero or multiple acknowledgements, and an acknowledgement must belong to at least one booking. |
-| MAINTENANCE_RECORD | 1 : 1 | ACKNOWLEDGEMENT | referenced_in | MR mandatory; Ack optional | An acknowledgement belongs to exactly one maintenance record, and a maintenance record can be referenced in zero or one acknowledgement. |
+| BOOKING | 1 : N | ACKNOWLEDGEMENT | records | Booking optional; Ack mandatory | A booking may have zero or many acknowledgements; each acknowledgement belongs to exactly one booking. |
+| MAINTENANCE_RECORD | 1 : N | ACKNOWLEDGEMENT | concerns | MR optional; Ack mandatory | A maintenance record may be referenced by zero or many acknowledgements; each acknowledgement concerns exactly one maintenance record. |
 
 ---
 
@@ -180,7 +172,7 @@ Copy the code below and paste it into [dbdiagram.io](https://dbdiagram.io/)  to 
 
 Table ROLE {
   role_id integer [pk, increment]
-  role_name varchar(50) [not null]
+  role_name varchar(50) [not null, unique]
 }
 
 Table USER {
@@ -199,6 +191,7 @@ Table USAGE_POLICY {
   max_duration_minutes integer
   requires_business_hours boolean
   department_allowed varchar(255)
+  legacy_policy_text text
 }
 
 Table ROLE_USAGE_POLICY {
@@ -268,16 +261,12 @@ Table MAINTENANCE_RECORD {
 }
 
 Table ACKNOWLEDGEMENT {
-  acknowledgement_id integer [pk, increment]
-  maintenance_id integer [not null, unique]
-}
-
-Table BOOKING_ACKNOWLEDGEMENT {
   booking_id integer [not null]
-  acknowledgement_id integer [not null]
+  maintenance_record_id integer [not null]
+  acknowledged_at datetime
   
   Indexes {
-    (booking_id, acknowledgement_id) [pk, name: 'pk_booking_acknowledgement']
+    (booking_id, maintenance_record_id) [pk, name: 'pk_acknowledgement']
   }
 }
 
@@ -312,12 +301,11 @@ Ref: MAINTENANCE_RECORD.space_code > SPACE.space_code
 Ref: MAINTENANCE_RECORD.reporter_id > USER.user_id
 Ref: MAINTENANCE_RECORD.assigned_staff_id > USER.user_id
 
-// ACKNOWLEDGEMENT referencing MAINTENANCE_RECORD (1:1 relation)
-Ref: ACKNOWLEDGEMENT.maintenance_id - MAINTENANCE_RECORD.maintenance_id
+// ACKNOWLEDGEMENT belongs to one BOOKING (N:1 relation)
+Ref: ACKNOWLEDGEMENT.booking_id > BOOKING.booking_id [delete: cascade]
 
-// BOOKING_ACKNOWLEDGEMENT junction table (M:N between BOOKING and ACKNOWLEDGEMENT)
-Ref: BOOKING_ACKNOWLEDGEMENT.booking_id > BOOKING.booking_id [delete: cascade]
-Ref: BOOKING_ACKNOWLEDGEMENT.acknowledgement_id > ACKNOWLEDGEMENT.acknowledgement_id [delete: cascade]
+// ACKNOWLEDGEMENT concerns one MAINTENANCE_RECORD (N:1 relation)
+Ref: ACKNOWLEDGEMENT.maintenance_record_id > MAINTENANCE_RECORD.maintenance_id [delete: cascade]
 ```
 
 ### Business Integrity Constraints (T-SQL Domain CHECKs)
@@ -341,8 +329,8 @@ Ref: BOOKING_ACKNOWLEDGEMENT.acknowledgement_id > ACKNOWLEDGEMENT.acknowledgemen
 * **`chk_booking_status_domain`**: `CHECK ([booking_status] IN ('pending', 'approved', 'rejected', 'cancelled', 'checked_in', 'completed', 'no_show'))`
 * **`chk_booking_time_order`**: `CHECK ([requested_start_time] < [requested_end_time])`
 * **`chk_booking_actual_time_order`**: `CHECK ([actual_start_time] IS NULL OR [actual_end_time] IS NULL OR [actual_start_time] < [actual_end_time])`
-* **`chk_booking_decision_fields`**: `CHECK ([booking_status] NOT IN ('rejected') OR ([decision_staff_id] IS NOT NULL AND [decision_time] IS NOT NULL AND [decision_note] IS NOT NULL))` 
-  *(Note: If status is 'approved', equaling to auto-approval, `decision_staff_id` can be NULL)*
+* **`chk_booking_decision_fields`**: `CHECK (([booking_status] <> 'rejected' OR ([decision_staff_id] IS NOT NULL AND [decision_time] IS NOT NULL AND [decision_note] IS NOT NULL)) AND ([booking_status] <> 'approved' OR [decision_time] IS NOT NULL))`
+  *(Note: A rejected booking requires the deciding staff member, decision time, and decision note. Every approved booking requires a decision time. For an auto-approved booking, `decision_staff_id` may be NULL because the system made the decision.)*
 * **`chk_booking_rejection_reason`**: `CHECK ([booking_status] <> 'rejected' OR [rejection_reason] IS NOT NULL)`
 * **`chk_booking_checkin_fields`**: `CHECK ([booking_status] NOT IN ('checked_in', 'completed') OR ([check_in_staff_id] IS NOT NULL AND [actual_start_time] IS NOT NULL AND [initial_condition] IS NOT NULL))`
 * **`chk_booking_completion_fields`**: `CHECK ([booking_status] <> 'completed' OR ([completion_staff_id] IS NOT NULL AND [actual_end_time] IS NOT NULL AND [final_condition] IS NOT NULL AND [usage_notes] IS NOT NULL))`
