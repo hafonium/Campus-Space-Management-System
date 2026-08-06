@@ -1,0 +1,837 @@
+-- ============================================================================
+-- High-volume Sample Data Generation — Campus Space Management System (G09)
+-- File: outputs/13-high-volume-sample-data-G09.sql
+-- Target: Microsoft SQL Server 2022 (T-SQL), Phase 2 schema
+--          (run after 05-db-definition-G09.sql, 06-sample-data-G09.sql and
+--           10-schema-migration-G09.sql)
+--
+-- Generates a deterministic high-volume dataset:
+--   - 100,000 bookings by default (range 100,000 .. 500,000)
+--   - at least three complete academic years
+--   - maintenance records (advisory and out-of-service)
+--   - cancellations, no-shows, rejections, completions, check-ins
+--   - advisory acknowledgements for every overlapping booking
+--
+-- Determinism: the same parameters produce the same logical dataset. All
+-- indices are derived arithmetically from digit-based number tables (no
+-- ROW_NUMBER over unordered rows), and user/staff ids are resolved through
+-- explicit id maps instead of relying on IDENTITY allocation order.
+--   Generated prefixes: gen-<n>@campus.example (users), GSP-<n> (spaces),
+--   GEN-<n> (phones), [GEN] (descriptions).
+-- Rerunnable: cleanup deletes only previously generated rows; the
+--   hand-written demonstration rows from 06-sample-data-G09.sql are kept.
+--
+-- NOTE: the whole script runs as a single batch (no GO separators) so that
+-- parameters declared at the top stay in scope.
+-- ============================================================================
+
+USE CampusSpaceManagementSystem;
+
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+SET DATEFIRST 1;
+
+-- ============================================================================
+-- 0. GENERATION PARAMETERS
+-- ============================================================================
+DECLARE @BookingCount INT        = 100000;  -- valid range 100000 .. 500000
+DECLARE @Seed INT                = 9009;    -- deterministic seed
+DECLARE @FirstAcademicYear INT   = 2023;    -- academic year start (Sep 1)
+DECLARE @AcademicYearCount INT   = 3;       -- minimum 3 complete academic years
+DECLARE @BatchSize INT           = 25000;   -- bulk-insert batch size
+DECLARE @CalendarTailDays INT    = 21;      -- schedule buffer past the last AY end
+
+IF @BookingCount < 100000 OR @BookingCount > 500000
+    THROW 53000, 'BookingCount must be between 100000 and 500000.', 1;
+IF @AcademicYearCount < 3
+    THROW 53001, 'AcademicYearCount must be at least 3.', 1;
+IF @BatchSize < 10000
+    THROW 53002, 'BatchSize must be at least 10000.', 1;
+
+-- ============================================================================
+-- 1. CLEANUP — delete only previously generated rows
+-- ============================================================================
+PRINT 'Step 1: cleanup of previously generated rows';
+
+DELETE a
+FROM dbo.ACKNOWLEDGEMENT a
+WHERE EXISTS (SELECT 1 FROM dbo.BOOKING b JOIN dbo.[USER] u ON u.user_id = b.requester_id
+              WHERE b.booking_id = a.booking_id AND u.email LIKE 'gen-%@campus.example')
+   OR EXISTS (SELECT 1 FROM dbo.MAINTENANCE_RECORD m
+              WHERE m.maintenance_id = a.maintenance_id
+                AND m.problem_description LIKE '[[]GEN]%');
+
+DELETE rp
+FROM dbo.ROLE_USAGE_POLICY rp
+WHERE EXISTS (SELECT 1 FROM dbo.USAGE_POLICY p
+              WHERE p.policy_id = rp.policy_id AND p.policy_name LIKE '[[]GEN]%');
+
+DELETE sf
+FROM dbo.SPACE_FACILITY sf
+WHERE EXISTS (SELECT 1 FROM dbo.SPACE s
+              WHERE s.space_code = sf.space_code AND s.space_code LIKE 'GSP-%');
+
+DELETE FROM dbo.MAINTENANCE_RECORD WHERE problem_description LIKE '[[]GEN]%';
+
+DELETE b
+FROM dbo.BOOKING b
+WHERE EXISTS (SELECT 1 FROM dbo.[USER] u
+              WHERE u.user_id = b.requester_id AND u.email LIKE 'gen-%@campus.example');
+
+DELETE FROM dbo.SPACE WHERE space_code LIKE 'GSP-%';
+DELETE FROM dbo.[USER] WHERE email LIKE 'gen-%@campus.example';
+DELETE FROM dbo.USAGE_POLICY WHERE policy_name LIKE '[[]GEN]%';
+DELETE FROM dbo.FACILITY WHERE facility_name LIKE '[[]GEN]%';
+
+-- ============================================================================
+-- 2. DETERMINISTIC SCHEDULING CALENDAR
+-- ============================================================================
+PRINT 'Step 2: scheduling calendar';
+
+DECLARE @AYStart DATETIME2 = DATEFROMPARTS(@FirstAcademicYear, 9, 1);
+DECLARE @AYEnd   DATETIME2 = DATEFROMPARTS(@FirstAcademicYear + @AcademicYearCount, 9, 1);
+DECLARE @CalStart DATETIME2 = @AYStart;
+DECLARE @CalEnd   DATETIME2 = DATEADD(DAY, @CalendarTailDays, @AYEnd);
+DECLARE @TotalDays INT = DATEDIFF(DAY, @CalStart, @CalEnd);
+DECLARE @WPY0 INT, @WPY1 INT, @WPY2 INT;
+
+-- Weekday ordinal list (Mon-Fri) and Saturday ordinal list
+IF OBJECT_ID('tempdb..#weekdays') IS NOT NULL DROP TABLE #weekdays;
+CREATE TABLE #weekdays (wd_ord INT NOT NULL PRIMARY KEY, wd_date DATE NOT NULL);
+
+IF OBJECT_ID('tempdb..#saturdays') IS NOT NULL DROP TABLE #saturdays;
+CREATE TABLE #saturdays (sa_ord INT NOT NULL PRIMARY KEY, sa_date DATE NOT NULL);
+
+WITH DAYS(d) AS (
+    SELECT TOP (@TotalDays) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1
+    FROM (SELECT 1 AS v UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+          UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8
+          UNION ALL SELECT 9 UNION ALL SELECT 10) d1
+    CROSS JOIN (SELECT 1 AS v UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+                UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8
+                UNION ALL SELECT 9 UNION ALL SELECT 10) d2
+    CROSS JOIN (SELECT 1 AS v UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+                UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8
+                UNION ALL SELECT 9 UNION ALL SELECT 10) d3
+    CROSS JOIN (SELECT 1 AS v UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+                UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8
+                UNION ALL SELECT 9 UNION ALL SELECT 10) d4
+),
+CAL(dt) AS (SELECT DATEADD(DAY, d, @CalStart) FROM DAYS)
+INSERT INTO #weekdays (wd_ord, wd_date)
+SELECT ROW_NUMBER() OVER (ORDER BY dt) - 1, dt
+FROM CAL
+WHERE DATEPART(WEEKDAY, dt) BETWEEN 1 AND 5;
+
+WITH DAYS(d) AS (
+    SELECT TOP (@TotalDays) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1
+    FROM (SELECT 1 AS v UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+          UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8
+          UNION ALL SELECT 9 UNION ALL SELECT 10) d1
+    CROSS JOIN (SELECT 1 AS v UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+                UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8
+                UNION ALL SELECT 9 UNION ALL SELECT 10) d2
+    CROSS JOIN (SELECT 1 AS v UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+                UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8
+                UNION ALL SELECT 9 UNION ALL SELECT 10) d3
+    CROSS JOIN (SELECT 1 AS v UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+                UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8
+                UNION ALL SELECT 9 UNION ALL SELECT 10) d4
+),
+CAL(dt) AS (SELECT DATEADD(DAY, d, @CalStart) FROM DAYS)
+INSERT INTO #saturdays (sa_ord, sa_date)
+SELECT ROW_NUMBER() OVER (ORDER BY dt) - 1, dt
+FROM CAL
+WHERE DATEPART(WEEKDAY, dt) = 6;
+
+SELECT @WPY0 = COUNT(*) FROM #weekdays WHERE wd_date < DATEADD(YEAR, 1, @AYStart);
+SELECT @WPY1 = COUNT(*) FROM #weekdays
+WHERE wd_date >= DATEADD(YEAR, 1, @AYStart) AND wd_date < DATEADD(YEAR, 2, @AYStart);
+SELECT @WPY2 = COUNT(*) FROM #weekdays
+WHERE wd_date >= DATEADD(YEAR, 2, @AYStart);
+
+DECLARE @WeekdayCount INT = (SELECT COUNT(*) FROM #weekdays);
+DECLARE @SaturdayCount INT = (SELECT COUNT(*) FROM #saturdays);
+
+-- Space count: enough slots so every space spans the full calendar.
+-- 6 slots per weekday (08:00-10:00 ... 18:00-20:00), non-overlapping.
+DECLARE @SpaceCount INT = CASE
+    WHEN @BookingCount / (@WeekdayCount * 6.0) <= 30 THEN 30
+    ELSE CEILING(@BookingCount / (@WeekdayCount * 6.0))
+END;
+DECLARE @UserCount INT = 2000;
+DECLARE @PolicyCount INT = 12;
+DECLARE @StaffCount INT = 60;       -- facility_staff band: user_idx 0..59
+DECLARE @ManagerCount INT = 40;     -- facility_manager band: user_idx 60..99
+DECLARE @FirstGenUserId INT = (SELECT ISNULL(MAX(user_id), 0) + 1 FROM dbo.[USER]);
+
+PRINT '  Calendar: ' + CONVERT(VARCHAR(10), @CalStart) + ' .. '
+    + CONVERT(VARCHAR(10), @CalEnd) + '  weekdays=' + CAST(@WeekdayCount AS VARCHAR(10))
+    + '  spaces=' + CAST(@SpaceCount AS VARCHAR(10));
+
+-- ============================================================================
+-- 3. PARENT TABLES
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 3.1 USAGE_POLICY
+-- ----------------------------------------------------------------------------
+PRINT 'Step 3.1: usage policies';
+
+IF OBJECT_ID('dbo.stg_gen_policy', 'U') IS NOT NULL DROP TABLE dbo.stg_gen_policy;
+CREATE TABLE dbo.stg_gen_policy (
+    policy_idx INT NOT NULL,
+    policy_name VARCHAR(255) NOT NULL,
+    max_duration_minutes INT NULL,
+    requires_business_hours BIT NULL,
+    department_allowed VARCHAR(255) NULL,
+    legacy_policy_text VARCHAR(MAX) NULL
+);
+
+WITH NUMS(n) AS (
+    SELECT d1.v*1000 + d2.v*100 + d3.v*10 + d4.v
+    FROM (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+          UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+          UNION ALL SELECT 8 UNION ALL SELECT 9) d1
+    CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                UNION ALL SELECT 8 UNION ALL SELECT 9) d2
+    CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                UNION ALL SELECT 8 UNION ALL SELECT 9) d3
+    CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                UNION ALL SELECT 8 UNION ALL SELECT 9) d4
+)
+INSERT INTO dbo.stg_gen_policy
+SELECT n,
+       '[GEN] Policy ' + CAST(n + 1 AS VARCHAR(10)),
+       120 + ((n * 47) % 180),
+       CASE WHEN n % 2 = 0 THEN 1 ELSE 0 END,
+       NULL,
+       NULL
+FROM NUMS
+WHERE n < @PolicyCount;
+
+INSERT INTO dbo.USAGE_POLICY (policy_name, max_duration_minutes,
+                              requires_business_hours, department_allowed,
+                              legacy_policy_text)
+SELECT policy_name, max_duration_minutes, requires_business_hours,
+       department_allowed, legacy_policy_text
+FROM dbo.stg_gen_policy;
+
+-- ----------------------------------------------------------------------------
+-- 3.2 ROLE_USAGE_POLICY (deterministic links)
+-- ----------------------------------------------------------------------------
+PRINT 'Step 3.2: role-usage-policy links';
+
+DECLARE @RoleStudent INT = (SELECT role_id FROM dbo.ROLE WHERE role_name = 'student');
+DECLARE @RoleLecturer INT = (SELECT role_id FROM dbo.ROLE WHERE role_name = 'lecturer');
+DECLARE @RoleTA INT = (SELECT role_id FROM dbo.ROLE WHERE role_name = 'teaching_assistant');
+DECLARE @RoleAdmin INT = (SELECT role_id FROM dbo.ROLE WHERE role_name = 'department_administrator');
+DECLARE @RoleStaff INT = (SELECT role_id FROM dbo.ROLE WHERE role_name = 'facility_staff');
+DECLARE @RoleManager INT = (SELECT role_id FROM dbo.ROLE WHERE role_name = 'facility_manager');
+
+INSERT INTO dbo.ROLE_USAGE_POLICY (role_id, policy_id)
+SELECT CASE p.policy_idx % 3
+           WHEN 0 THEN @RoleStudent
+           WHEN 1 THEN @RoleLecturer
+           ELSE @RoleTA END,
+       pol.policy_id
+FROM dbo.stg_gen_policy p
+JOIN dbo.USAGE_POLICY pol ON pol.policy_name = p.policy_name
+WHERE p.policy_idx % 2 = 1;
+
+-- ----------------------------------------------------------------------------
+-- 3.3 SPACE
+-- ----------------------------------------------------------------------------
+PRINT 'Step 3.3: spaces';
+
+IF OBJECT_ID('dbo.stg_gen_space', 'U') IS NOT NULL DROP TABLE dbo.stg_gen_space;
+CREATE TABLE dbo.stg_gen_space (
+    space_idx INT NOT NULL,
+    space_code VARCHAR(50) NOT NULL,
+    space_name VARCHAR(255) NOT NULL,
+    space_type VARCHAR(50) NOT NULL,
+    building VARCHAR(255) NOT NULL,
+    floor INT NOT NULL,
+    room_number VARCHAR(20) NOT NULL,
+    capacity INT NOT NULL,
+    current_status VARCHAR(50) NOT NULL,
+    policy_id INT NOT NULL
+);
+
+WITH NUMS(n) AS (
+    SELECT d1.v*1000 + d2.v*100 + d3.v*10 + d4.v
+    FROM (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+          UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+          UNION ALL SELECT 8 UNION ALL SELECT 9) d1
+    CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                UNION ALL SELECT 8 UNION ALL SELECT 9) d2
+    CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                UNION ALL SELECT 8 UNION ALL SELECT 9) d3
+    CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                UNION ALL SELECT 8 UNION ALL SELECT 9) d4
+)
+INSERT INTO dbo.stg_gen_space
+SELECT n,
+       'GSP-' + CAST(n + 1 AS VARCHAR(10)),
+       'Generated Space ' + CAST(n + 1 AS VARCHAR(10)) + ' [GEN]',
+       CASE n % 6
+           WHEN 0 THEN 'auditorium' WHEN 1 THEN 'classroom' WHEN 2 THEN 'computer_lab'
+           WHEN 3 THEN 'project_lab' WHEN 4 THEN 'meeting_room' ELSE 'student_workspace' END,
+       'GEN-Block-' + CAST((n / 10) % 3 + 1 AS VARCHAR(10)),
+       (n % 4) + 1,
+       'G-' + CAST(n + 1 AS VARCHAR(10)),
+       20 + ((n * 37) % 180),
+       CASE WHEN n % 7 = 0 THEN 'in_use' ELSE 'available' END,
+       (SELECT TOP 1 policy_id FROM dbo.USAGE_POLICY p
+        JOIN dbo.stg_gen_policy s ON s.policy_name = p.policy_name
+        WHERE s.policy_idx = n % @PolicyCount)
+FROM NUMS
+WHERE n < @SpaceCount;
+
+INSERT INTO dbo.SPACE (space_code, space_name, space_type, building, floor,
+                       room_number, capacity, current_status, policy_id)
+SELECT space_code, space_name, space_type, building, floor, room_number,
+       capacity, current_status, policy_id
+FROM dbo.stg_gen_space;
+
+-- ----------------------------------------------------------------------------
+-- 3.4 FACILITY + SPACE_FACILITY
+-- ----------------------------------------------------------------------------
+PRINT 'Step 3.4: facilities and space-facility links';
+
+INSERT INTO dbo.FACILITY (facility_name)
+SELECT '[GEN] Facility ' + CAST(i AS VARCHAR(10))
+FROM (VALUES (1),(2),(3),(4)) v(i)
+WHERE NOT EXISTS (SELECT 1 FROM dbo.FACILITY f
+                  WHERE f.facility_name = '[GEN] Facility ' + CAST(v.i AS VARCHAR(10)));
+
+IF OBJECT_ID('tempdb..#gen_facility') IS NOT NULL DROP TABLE #gen_facility;
+SELECT facility_id,
+       ROW_NUMBER() OVER (ORDER BY facility_id) AS fac_idx,
+       COUNT(*) OVER () AS fac_count
+INTO #gen_facility
+FROM dbo.FACILITY
+WHERE facility_name LIKE '[[]GEN]%';
+
+INSERT INTO dbo.SPACE_FACILITY (space_code, facility_id)
+SELECT s.space_code, f.facility_id
+FROM dbo.stg_gen_space s
+CROSS JOIN #gen_facility f
+WHERE f.fac_idx = (s.space_idx % f.fac_count) + 1
+   OR f.fac_idx = ((s.space_idx + 3) % f.fac_count) + 1;
+
+-- ----------------------------------------------------------------------------
+-- 3.5 USER (staff first for deterministic id band)
+-- ----------------------------------------------------------------------------
+PRINT 'Step 3.5: users';
+
+IF OBJECT_ID('dbo.stg_gen_user', 'U') IS NOT NULL DROP TABLE dbo.stg_gen_user;
+CREATE TABLE dbo.stg_gen_user (
+    user_idx INT NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(20) NOT NULL,
+    role_id INT NOT NULL,
+    department VARCHAR(255) NOT NULL,
+    account_status VARCHAR(50) NOT NULL
+);
+
+WITH NUMS(n) AS (
+    SELECT d1.v*1000 + d2.v*100 + d3.v*10 + d4.v
+    FROM (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+          UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+          UNION ALL SELECT 8 UNION ALL SELECT 9) d1
+    CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                UNION ALL SELECT 8 UNION ALL SELECT 9) d2
+    CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                UNION ALL SELECT 8 UNION ALL SELECT 9) d3
+    CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                UNION ALL SELECT 8 UNION ALL SELECT 9) d4
+)
+INSERT INTO dbo.stg_gen_user
+SELECT n,
+       'Generated User ' + CAST(n + 1 AS VARCHAR(10)),
+       'gen-' + CAST(n + 1 AS VARCHAR(10)) + '@campus.example',
+       'GEN-' + CAST(n + 1 AS VARCHAR(10)),
+       CASE WHEN n < 60 THEN @RoleStaff
+            WHEN n < 100 THEN @RoleManager
+            WHEN n < 210 THEN @RoleAdmin
+            WHEN n < 310 THEN @RoleLecturer
+            WHEN n < 400 THEN @RoleTA
+            ELSE @RoleStudent END,
+       'Department ' + CAST((n % 12) + 1 AS VARCHAR(10)),
+       CASE WHEN n % 97 = 0 THEN 'suspended' ELSE 'active' END
+FROM NUMS
+WHERE n < @UserCount;
+
+-- facility_staff (0..59) and facility_manager (60..99) inserted first so the
+-- staff user ids form a contiguous band starting at @FirstGenUserId.
+INSERT INTO dbo.[USER] (full_name, email, phone_number, role_id, department, account_status)
+SELECT full_name, email, phone_number, role_id, department, account_status
+FROM dbo.stg_gen_user
+WHERE user_idx < 100
+ORDER BY user_idx;
+
+INSERT INTO dbo.[USER] (full_name, email, phone_number, role_id, department, account_status)
+SELECT full_name, email, phone_number, role_id, department, account_status
+FROM dbo.stg_gen_user
+WHERE user_idx >= 100
+ORDER BY user_idx;
+
+-- Deterministic id maps (do not rely on IDENTITY allocation order)
+IF OBJECT_ID('tempdb..#user_map') IS NOT NULL DROP TABLE #user_map;
+SELECT user_id, user_idx
+INTO #user_map
+FROM (
+    SELECT user_id,
+           CAST(REPLACE(REPLACE(email, 'gen-', ''), '@campus.example', '') AS INT) - 1 AS user_idx
+    FROM dbo.[USER]
+    WHERE email LIKE 'gen-%@campus.example'
+) m;
+
+IF OBJECT_ID('tempdb..#decision_staff') IS NOT NULL DROP TABLE #decision_staff;
+SELECT ROW_NUMBER() OVER (ORDER BY user_id) - 1 AS staff_ord, user_id
+INTO #decision_staff
+FROM dbo.[USER] u
+JOIN dbo.ROLE r ON r.role_id = u.role_id
+WHERE u.email LIKE 'gen-%@campus.example'
+  AND r.role_name IN ('facility_staff', 'facility_manager');
+
+IF OBJECT_ID('tempdb..#checkin_staff') IS NOT NULL DROP TABLE #checkin_staff;
+SELECT ROW_NUMBER() OVER (ORDER BY user_id) - 1 AS staff_ord, user_id
+INTO #checkin_staff
+FROM dbo.[USER] u
+JOIN dbo.ROLE r ON r.role_id = u.role_id
+WHERE u.email LIKE 'gen-%@campus.example'
+  AND r.role_name = 'facility_staff';
+
+-- ============================================================================
+-- 4. MAINTENANCE_RECORD (advisory + out-of-service)
+-- ============================================================================
+PRINT 'Step 4: maintenance records';
+
+IF OBJECT_ID('dbo.stg_gen_maintenance', 'U') IS NOT NULL DROP TABLE dbo.stg_gen_maintenance;
+CREATE TABLE dbo.stg_gen_maintenance (
+    space_code VARCHAR(50) NOT NULL,
+    reporter_id INT NOT NULL,
+    assigned_staff_id INT NULL,
+    problem_description VARCHAR(MAX) NOT NULL,
+    start_time DATETIME2 NOT NULL,
+    completion_time DATETIME2 NULL,
+    status VARCHAR(50) NOT NULL,
+    result_note VARCHAR(MAX) NULL,
+    impact_level VARCHAR(50) NOT NULL
+);
+
+-- Advisory windows: weekday mornings, open (reported/in_progress), overlapping
+-- generated bookings -> acknowledgement links are created in step 8.
+INSERT INTO dbo.stg_gen_maintenance (
+    space_code, reporter_id, assigned_staff_id, problem_description,
+    start_time, completion_time, status, result_note, impact_level
+)
+SELECT s.space_code,
+       (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 37) % @UserCount),
+       (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 13) % 100),
+       '[GEN] Advisory maintenance window A for ' + s.space_code,
+       CAST(DATEADD(HOUR, 8, CAST(w.wd_date AS DATETIME2)) AS DATETIME2),
+       NULL,
+       'in_progress',
+       NULL,
+       'advisory'
+FROM dbo.stg_gen_space s
+JOIN #weekdays w ON w.wd_ord = ((s.space_idx * 7 + 3) % @WeekdayCount)
+UNION ALL
+SELECT s.space_code,
+       (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 37 + 11) % @UserCount),
+       (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 13 + 7) % 100),
+       '[GEN] Advisory maintenance window B for ' + s.space_code,
+       CAST(DATEADD(HOUR, 8, CAST(w.wd_date AS DATETIME2)) AS DATETIME2),
+       NULL,
+       'reported',
+       NULL,
+       'advisory'
+FROM dbo.stg_gen_space s
+JOIN #weekdays w ON w.wd_ord = ((s.space_idx * 11 + 5) % @WeekdayCount);
+
+-- Out-of-service windows: weekends only (no bookings), Saturday 08:00 to
+-- Sunday 20:00. One open (in_progress), one completed.
+INSERT INTO dbo.stg_gen_maintenance (
+    space_code, reporter_id, assigned_staff_id, problem_description,
+    start_time, completion_time, status, result_note, impact_level
+)
+SELECT s.space_code,
+       (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 41 + 3) % @UserCount),
+       (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 17) % 100),
+       '[GEN] Out-of-service maintenance weekend W for ' + s.space_code,
+       CAST(DATEADD(HOUR, 8, CAST(w.sa_date AS DATETIME2)) AS DATETIME2),
+       CAST(DATEADD(HOUR, 20, CAST(DATEADD(DAY, 1, w.sa_date) AS DATETIME2)) AS DATETIME2),
+       'in_progress',
+       NULL,
+       'out-of-service'
+FROM dbo.stg_gen_space s
+JOIN #saturdays w ON w.sa_ord = (s.space_idx % @SaturdayCount)
+UNION ALL
+SELECT s.space_code,
+       (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 41 + 5) % @UserCount),
+       (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 17 + 9) % 100),
+       '[GEN] Out-of-service maintenance weekend X for ' + s.space_code,
+       CAST(DATEADD(HOUR, 8, CAST(w.sa_date AS DATETIME2)) AS DATETIME2),
+       CAST(DATEADD(HOUR, 20, CAST(DATEADD(DAY, 1, w.sa_date) AS DATETIME2)) AS DATETIME2),
+       'completed',
+       '[GEN] Out-of-service work finished',
+       'out-of-service'
+FROM dbo.stg_gen_space s
+JOIN #saturdays w ON w.sa_ord = ((s.space_idx + 13) % @SaturdayCount);
+
+INSERT INTO dbo.MAINTENANCE_RECORD (
+    space_code, reporter_id, assigned_staff_id, problem_description,
+    start_time, completion_time, status, result_note, impact_level
+)
+SELECT space_code, reporter_id, assigned_staff_id, problem_description,
+       start_time, completion_time, status, result_note, impact_level
+FROM dbo.stg_gen_maintenance;
+
+-- ============================================================================
+-- 5. BOOKING STAGING
+-- ============================================================================
+PRINT 'Step 5: booking staging (set-based)';
+
+IF OBJECT_ID('dbo.stg_gen_booking', 'U') IS NOT NULL DROP TABLE dbo.stg_gen_booking;
+CREATE TABLE dbo.stg_gen_booking (
+    n BIGINT NOT NULL,
+    requester_id INT NOT NULL,
+    space_code VARCHAR(50) NOT NULL,
+    requested_start_time DATETIME2 NOT NULL,
+    requested_end_time DATETIME2 NOT NULL,
+    purpose VARCHAR(50) NOT NULL,
+    expected_participants INT NOT NULL,
+    booking_status VARCHAR(50) NOT NULL,
+    decision_staff_id INT NULL,
+    decision_time DATETIME2 NULL,
+    decision_note VARCHAR(MAX) NULL,
+    rejection_reason VARCHAR(255) NULL,
+    actual_start_time DATETIME2 NULL,
+    check_in_staff_id INT NULL,
+    initial_condition VARCHAR(MAX) NULL,
+    actual_end_time DATETIME2 NULL,
+    completion_staff_id INT NULL,
+    final_condition VARCHAR(MAX) NULL,
+    usage_notes VARCHAR(MAX) NULL
+);
+
+INSERT INTO dbo.stg_gen_booking (
+    n, requester_id, space_code, requested_start_time, requested_end_time,
+    purpose, expected_participants, booking_status,
+    decision_staff_id, decision_time, decision_note, rejection_reason,
+    actual_start_time, check_in_staff_id, initial_condition,
+    actual_end_time, completion_staff_id, final_condition, usage_notes
+)
+SELECT
+    src.n,
+    src.requester_id,
+    src.space_code,
+    src.req_start,
+    src.req_end,
+    sv.purpose,
+    sv.participants,
+    sv.status,
+    CASE WHEN sv.status IN ('approved', 'rejected') THEN ds.user_id END AS decision_staff_id,
+    CASE WHEN sv.status IN ('approved', 'rejected')
+         THEN DATEADD(HOUR, -3, src.req_start) END AS decision_time,
+    CASE WHEN sv.status IN ('approved', 'rejected')
+         THEN '[GEN] decision: ' + sv.status END AS decision_note,
+    CASE WHEN sv.status = 'rejected'
+         THEN '[GEN] rejection reason ' + CAST(src.h_cancel % 5 AS VARCHAR(10)) END AS rejection_reason,
+    CASE WHEN sv.status IN ('checked_in', 'completed')
+         THEN DATEADD(MINUTE, 5 + (src.h_minutes % 10), src.req_start) END AS actual_start_time,
+    CASE WHEN sv.status IN ('checked_in', 'completed') THEN cs.user_id END AS check_in_staff_id,
+    CASE WHEN sv.status IN ('checked_in', 'completed') THEN '[GEN] clean and ready' END AS initial_condition,
+    CASE WHEN sv.status = 'completed'
+         THEN DATEADD(MINUTE, 5 + (src.h_minutes % 10), src.req_end) END AS actual_end_time,
+    CASE WHEN sv.status = 'completed' THEN cs.user_id END AS completion_staff_id,
+    CASE WHEN sv.status = 'completed' THEN '[GEN] left in good condition' END AS final_condition,
+    CASE WHEN sv.status = 'completed' THEN '[GEN] normal usage' END AS usage_notes
+FROM (
+    SELECT
+        n,
+        um.user_id AS requester_id,
+        spc.space_code,
+        spc.capacity,
+        ((n / @SpaceCount) % @WeekdayCount) AS day_ord,
+        ((n / @SpaceCount) / @WeekdayCount) % 6 AS slot_of_day,
+        CASE WHEN (n / @SpaceCount) % @WeekdayCount < @WPY0 THEN 0
+             WHEN (n / @SpaceCount) % @WeekdayCount < @WPY0 + @WPY1 THEN 1
+             ELSE 2 END AS year_zone,
+        CAST(DATEADD(HOUR, 8 + (((n / @SpaceCount) / @WeekdayCount) % 6) * 2, CAST(w.wd_date AS DATETIME2)) AS DATETIME2) AS req_start,
+        CAST(DATEADD(HOUR, 10 + (((n / @SpaceCount) / @WeekdayCount) % 6) * 2, CAST(w.wd_date AS DATETIME2)) AS DATETIME2) AS req_end,
+        CAST(ABS(CAST(CHECKSUM(CAST(@Seed AS BIGINT) * 1000003 + CAST(n AS BIGINT) * 40503) AS BIGINT)) % 1000 AS INT) AS h_status,
+        CAST(ABS(CAST(CHECKSUM(CAST(@Seed AS BIGINT) * 1000003 + CAST(n AS BIGINT) * 104729 + 17) AS BIGINT)) % 7 AS INT) AS h_purpose,
+        CAST(ABS(CAST(CHECKSUM(CAST(@Seed AS BIGINT) * 1000003 + CAST(n AS BIGINT) * 2087 + 41) AS BIGINT)) % 100 AS INT) AS h_staff,
+        CAST(ABS(CAST(CHECKSUM(CAST(@Seed AS BIGINT) * 1000003 + CAST(n AS BIGINT) * 509 + 3) AS BIGINT)) % 10 AS INT) AS h_minutes,
+        CAST(ABS(CAST(CHECKSUM(CAST(@Seed AS BIGINT) * 1000003 + CAST(n AS BIGINT) * 1299721 + 97) AS BIGINT)) % 1000 AS INT) AS h_cancel
+    FROM (
+        SELECT d1.v*100000 + d2.v*10000 + d3.v*1000 + d4.v*100 + d5.v*10 + d6.v AS n
+        FROM (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+              UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+              UNION ALL SELECT 8 UNION ALL SELECT 9) d1
+        CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                    UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                    UNION ALL SELECT 8 UNION ALL SELECT 9) d2
+        CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                    UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                    UNION ALL SELECT 8 UNION ALL SELECT 9) d3
+        CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                    UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                    UNION ALL SELECT 8 UNION ALL SELECT 9) d4
+        CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                    UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                    UNION ALL SELECT 8 UNION ALL SELECT 9) d5
+        CROSS JOIN (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
+                    UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
+                    UNION ALL SELECT 8 UNION ALL SELECT 9) d6
+    ) NUMS
+    JOIN dbo.stg_gen_space spc ON spc.space_idx = (n % @SpaceCount)
+    JOIN #weekdays w ON w.wd_ord = ((n / @SpaceCount) % @WeekdayCount)
+    JOIN #user_map um ON um.user_idx = (n % @UserCount)
+    WHERE n < @BookingCount
+) src
+LEFT JOIN #decision_staff ds ON ds.staff_ord = src.h_staff % 100
+LEFT JOIN #checkin_staff cs ON cs.staff_ord = src.h_staff % 60
+CROSS APPLY (
+    SELECT
+        CASE src.h_purpose
+            WHEN 0 THEN 'lecture' WHEN 1 THEN 'examination' WHEN 2 THEN 'seminar'
+            WHEN 3 THEN 'workshop' WHEN 4 THEN 'meeting' WHEN 5 THEN 'student_activity'
+            ELSE 'administrative_event' END AS purpose,
+        (src.h_cancel % src.capacity) + 1 AS participants,
+        CASE src.year_zone
+            WHEN 2 THEN
+                CASE WHEN src.h_status < 440 THEN 'approved'
+                     WHEN src.h_status < 780 THEN 'pending'
+                     WHEN src.h_status < 890 THEN 'completed'
+                     WHEN src.h_status < 920 THEN 'checked_in'
+                     WHEN src.h_status < 950 THEN 'no_show'
+                     WHEN src.h_status < 980 THEN 'cancelled'
+                     ELSE 'rejected' END
+            ELSE
+                CASE WHEN src.h_status < 45 THEN 'rejected'
+                     WHEN src.h_status < 75 THEN 'no_show'
+                     WHEN src.h_status < 155 THEN 'cancelled'
+                     WHEN src.h_status < 800 THEN 'completed'
+                     ELSE 'checked_in' END
+        END AS status
+) s
+CROSS APPLY (
+    SELECT s.purpose AS purpose, s.participants AS participants, s.status AS status
+) sv;
+
+DECLARE @StagedBookings BIGINT = (SELECT COUNT_BIG(*) FROM dbo.stg_gen_booking);
+PRINT '  staged bookings: ' + CAST(@StagedBookings AS VARCHAR(20));
+
+-- ============================================================================
+-- 6. PRE-LOAD VALIDATION (staged rows)
+-- ============================================================================
+PRINT 'Step 6: pre-load validation';
+
+DECLARE @StagedCount BIGINT = (SELECT COUNT_BIG(*) FROM dbo.stg_gen_booking);
+
+IF @StagedCount <> @BookingCount
+    THROW 53010, 'Staged booking count does not match BookingCount.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking WHERE requested_start_time >= requested_end_time)
+    THROW 53011, 'Staged booking has invalid requested time range.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking b
+           LEFT JOIN dbo.[USER] u ON u.user_id = b.requester_id
+           LEFT JOIN dbo.SPACE s ON s.space_code = b.space_code
+           WHERE u.user_id IS NULL OR s.space_code IS NULL)
+    THROW 53012, 'Staged booking references unknown user or space.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking WHERE booking_status NOT IN
+           ('pending','approved','rejected','cancelled','checked_in','completed','no_show'))
+    THROW 53013, 'Staged booking has invalid status.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking WHERE expected_participants <= 0)
+    THROW 53014, 'Staged booking has non-positive participants.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking
+           WHERE booking_status = 'rejected'
+             AND (decision_staff_id IS NULL OR decision_time IS NULL
+                  OR decision_note IS NULL OR rejection_reason IS NULL))
+    THROW 53015, 'Staged rejected booking is missing decision/rejection fields.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking
+           WHERE booking_status = 'approved' AND decision_time IS NULL)
+    THROW 53016, 'Staged approved booking is missing decision_time.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking
+           WHERE booking_status IN ('checked_in','completed')
+             AND (actual_start_time IS NULL OR check_in_staff_id IS NULL
+                  OR initial_condition IS NULL))
+    THROW 53017, 'Staged checked-in booking is missing check-in fields.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking
+           WHERE booking_status = 'completed'
+             AND (actual_end_time IS NULL OR completion_staff_id IS NULL
+                  OR final_condition IS NULL OR usage_notes IS NULL))
+    THROW 53018, 'Staged completed booking is missing completion fields.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking
+           GROUP BY space_code, requested_start_time
+           HAVING COUNT_BIG(*) > 1)
+    THROW 53019, 'Staged bookings contain a duplicate space/time slot.', 1;
+
+IF EXISTS (
+    SELECT 1
+    FROM dbo.stg_gen_booking a
+    JOIN dbo.stg_gen_booking b
+      ON a.space_code = b.space_code
+     AND a.n < b.n
+     AND a.booking_status = 'approved'
+     AND b.booking_status = 'approved'
+     AND a.requested_start_time < b.requested_end_time
+     AND a.requested_end_time > b.requested_start_time
+)
+    THROW 53020, 'Staged approved bookings overlap within a space.', 1;
+
+IF EXISTS (
+    SELECT 1
+    FROM dbo.stg_gen_booking b
+    JOIN dbo.MAINTENANCE_RECORD m
+      ON m.space_code = b.space_code
+     AND m.impact_level = 'out-of-service'
+     AND m.status IN ('reported','in_progress')
+     AND b.requested_start_time < COALESCE(m.completion_time, DATEADD(HOUR, 36, m.start_time))
+     AND b.requested_end_time > m.start_time
+)
+    THROW 53021, 'Staged booking overlaps out-of-service maintenance.', 1;
+
+PRINT '  staged validation: PASS';
+
+-- ============================================================================
+-- 7. BULK LOAD (trigger temporarily disabled, always re-enabled)
+-- ============================================================================
+PRINT 'Step 7: bulk loading bookings in batches of ' + CAST(@BatchSize AS VARCHAR(10));
+
+DECLARE @Offset BIGINT = 0;
+
+BEGIN TRY
+    ALTER TABLE dbo.BOOKING DISABLE TRIGGER trg_booking_enforce_rules;
+    PRINT '  dbo.trg_booking_enforce_rules DISABLED for bulk load';
+
+    WHILE @Offset < @BookingCount
+    BEGIN
+        INSERT INTO dbo.BOOKING (
+            requester_id, space_code, requested_start_time, requested_end_time,
+            purpose, expected_participants, booking_status,
+            decision_staff_id, decision_time, decision_note, rejection_reason,
+            actual_start_time, check_in_staff_id, initial_condition,
+            actual_end_time, completion_staff_id, final_condition, usage_notes
+        )
+        SELECT
+            requester_id, space_code, requested_start_time, requested_end_time,
+            purpose, expected_participants, booking_status,
+            decision_staff_id, decision_time, decision_note, rejection_reason,
+            actual_start_time, check_in_staff_id, initial_condition,
+            actual_end_time, completion_staff_id, final_condition, usage_notes
+        FROM dbo.stg_gen_booking
+        ORDER BY n
+        OFFSET @Offset ROWS
+        FETCH NEXT @BatchSize ROWS ONLY;
+
+        SET @Offset = @Offset + @BatchSize;
+        PRINT '    loaded ' + CAST(@Offset AS VARCHAR(20)) + ' bookings';
+    END;
+
+    ALTER TABLE dbo.BOOKING ENABLE TRIGGER trg_booking_enforce_rules;
+    PRINT '  dbo.trg_booking_enforce_rules ENABLED';
+END TRY
+BEGIN CATCH
+    -- The trigger must always be re-enabled, even on failure.
+    ALTER TABLE dbo.BOOKING ENABLE TRIGGER trg_booking_enforce_rules;
+    PRINT '  dbo.trg_booking_enforce_rules ENABLED after failure';
+    THROW;
+END CATCH;
+
+-- ============================================================================
+-- 8. ADVISORY ACKNOWLEDGEMENTS
+--    The bulk load bypassed the trigger's acknowledgement auto-sync, so the
+--    links are created here for every booking overlapping an open advisory
+--    maintenance record. ACKNOWLEDGEMENT(booking_id, maintenance_id,
+--    acknowledged_at) is the Phase 2 link model.
+-- ============================================================================
+PRINT 'Step 8: advisory acknowledgement links';
+
+INSERT INTO dbo.ACKNOWLEDGEMENT (booking_id, maintenance_id, acknowledged_at)
+SELECT b.booking_id, m.maintenance_id, b.requested_start_time
+FROM dbo.BOOKING b
+JOIN dbo.MAINTENANCE_RECORD m
+  ON m.space_code = b.space_code
+ AND m.impact_level = 'advisory'
+ AND m.status IN ('reported', 'in_progress')
+ AND b.requested_start_time < COALESCE(m.completion_time, CONVERT(DATETIME2, '9999-12-31'))
+ AND b.requested_end_time > m.start_time
+WHERE EXISTS (SELECT 1 FROM dbo.[USER] u
+              WHERE u.user_id = b.requester_id AND u.email LIKE 'gen-%@campus.example')
+  AND NOT EXISTS (SELECT 1 FROM dbo.ACKNOWLEDGEMENT a
+                  WHERE a.booking_id = b.booking_id AND a.maintenance_id = m.maintenance_id);
+
+DECLARE @AckLinks BIGINT = (SELECT COUNT_BIG(*) FROM dbo.ACKNOWLEDGEMENT);
+PRINT '  acknowledgement links: ' + CAST(@AckLinks AS VARCHAR(20));
+
+-- ============================================================================
+-- 9. POST-LOAD QUICK VALIDATION + SUMMARY
+-- ============================================================================
+PRINT 'Step 9: post-load validation';
+
+IF EXISTS (SELECT 1 FROM sys.triggers
+           WHERE object_id = OBJECT_ID('dbo.trg_booking_enforce_rules') AND is_disabled = 1)
+    THROW 53030, 'trg_booking_enforce_rules is disabled after generation.', 1;
+
+IF EXISTS (SELECT 1 FROM dbo.BOOKING b
+           LEFT JOIN dbo.[USER] u ON u.user_id = b.requester_id
+           LEFT JOIN dbo.SPACE s ON s.space_code = b.space_code
+           WHERE b.requester_id >= @FirstGenUserId
+             AND (u.user_id IS NULL OR s.space_code IS NULL))
+    THROW 53031, 'Generated booking has an orphan reference.', 1;
+
+SELECT booking_status, COUNT_BIG(*) AS cnt,
+       CAST(100.0 * COUNT_BIG(*) / SUM(COUNT_BIG(*)) OVER () AS DECIMAL(5,2)) AS pct
+FROM dbo.BOOKING b
+JOIN dbo.[USER] u ON u.user_id = b.requester_id
+WHERE u.email LIKE 'gen-%@campus.example'
+GROUP BY booking_status
+ORDER BY booking_status;
+
+SELECT MIN(requested_start_time) AS first_booking,
+       MAX(requested_start_time) AS last_booking,
+       DATEDIFF(DAY, MIN(requested_start_time), MAX(requested_start_time)) AS day_span
+FROM dbo.BOOKING b
+JOIN dbo.[USER] u ON u.user_id = b.requester_id
+WHERE u.email LIKE 'gen-%@campus.example';
+
+SELECT impact_level, status, COUNT_BIG(*) AS cnt
+FROM dbo.MAINTENANCE_RECORD
+WHERE problem_description LIKE '[[]GEN]%'
+GROUP BY impact_level, status
+ORDER BY impact_level, status;
+
+PRINT 'High-volume generation complete.';
+
+-- ============================================================================
+-- cleanup of staging tables
+-- ============================================================================
+DROP TABLE dbo.stg_gen_policy;
+DROP TABLE dbo.stg_gen_space;
+DROP TABLE dbo.stg_gen_user;
+DROP TABLE dbo.stg_gen_maintenance;
+DROP TABLE dbo.stg_gen_booking;
