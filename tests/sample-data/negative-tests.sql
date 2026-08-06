@@ -4,7 +4,7 @@
 -- Purpose: Confirm that the database rejects invalid operations. Every test
 --          runs inside its own transaction that is rolled back. An expected
 --          SQL error is a PASS; an operation that unexpectedly succeeds is a
---          FAIL. Run AFTER outputs/13-high-volume-sample-data-G09.sql has
+--          FAIL. Run AFTER outputs/14-data-generator-G09/high-volume-sample-data-G09.sql has
 --          populated the generated dataset.
 --
 -- Skeleton: the agent must finalize each value so the tests are runnable

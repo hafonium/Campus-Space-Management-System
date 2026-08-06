@@ -10,7 +10,7 @@ generated bookings). All scripts target Microsoft SQL Server 2022 and use
 | --- | --- |
 | `sample-data/assertions.sql` | Post-load validation suite. Verifies volume, academic-year coverage, status distribution minimums, referential integrity, status-specific fields, non-overlap rules, acknowledgement links, uniqueness, and constraint/trigger state. Raises `THROW` (51000–51034) on any failure and prints `PASS` at the end. |
 | `sample-data/negative-tests.sql` | Nine negative tests, each inside an isolated transaction that is rolled back. An expected SQL error is a PASS; an operation that unexpectedly succeeds is a FAIL. |
-| `sample-data/run-tests.sql` | Orchestrator that runs the assertion and negative-test suites and reports a summary (pending implementation). |
+| `sample-data/run-tests.sql` | Orchestrator that runs generation, the assertion and negative-test suites and reports a summary. |
 
 ## Prerequisites
 
@@ -25,10 +25,10 @@ Scripts must run in this order; later scripts assume earlier ones succeeded:
 1. `outputs/05-db-definition-G09.sql` — Phase 1 schema
 2. `outputs/06-sample-data-G09.sql` — hand-written demonstration rows
 3. `outputs/10-schema-migration-G09.sql` — Phase 2 migration (ROLE, ACKNOWLEDGEMENT, USAGE_POLICY, impact_level)
-4. `outputs/13-high-volume-sample-data-G09.sql` — deterministic high-volume generation (seed 9009, 100,000 bookings by default)
+4. `outputs/14-data-generator-G09/high-volume-sample-data-G09.sql` — deterministic high-volume generation (seed 9009, 100,000 bookings by default)
 5. `tests/sample-data/assertions.sql` — post-load validation
 6. `tests/sample-data/negative-tests.sql` — rejection tests
-7. `outputs/14-index-benchmark-G09.sql` — before/after index benchmarks
+7. `outputs/15-index-tuning-report-G09.md` — benchmark methodology and measured results (index candidate set in §1)
 
 ## Running the tests
 
@@ -36,10 +36,9 @@ Scripts must run in this order; later scripts assume earlier ones succeeded:
 sqlcmd -b -i outputs/05-db-definition-G09.sql
 sqlcmd -b -i outputs/06-sample-data-G09.sql
 sqlcmd -b -i outputs/10-schema-migration-G09.sql
-sqlcmd -b -i outputs/13-high-volume-sample-data-G09.sql
+sqlcmd -b -i outputs/14-data-generator-G09/high-volume-sample-data-G09.sql
 sqlcmd -b -i tests/sample-data/assertions.sql
 sqlcmd -b -i tests/sample-data/negative-tests.sql
-sqlcmd -b -i outputs/14-index-benchmark-G09.sql
 ```
 
 `-b` makes sqlcmd abort on SQL errors, so a failing assertion stops the pipeline.
@@ -81,6 +80,6 @@ PASS: all negative tests rejected the invalid operations.
 
 ## Status
 
-- `assertions.sql` — drafted, expected to pass against the generated dataset
-- `negative-tests.sql` — drafted (skeleton), resolvers must be finalized against the actual generated data
-- `run-tests.sql` — pending implementation by the sample-data engineer
+- `assertions.sql` — verified PASS against the 100,000-row generated dataset
+- `negative-tests.sql` — verified 9/9 PASS against the generated dataset
+- `run-tests.sql` — orchestrator including generation, assertions and negative tests

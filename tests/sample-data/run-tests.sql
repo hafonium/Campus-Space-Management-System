@@ -2,7 +2,7 @@
 -- High-volume sample-data test runner — Campus Space Management System (G09)
 -- File: tests/sample-data/run-tests.sql
 -- Purpose: End-to-end test runner for the high-volume dataset:
---   1. executes the generator (outputs/13-high-volume-sample-data-G09.sql)
+--   1. executes the generator (outputs/14-data-generator-G09/high-volume-sample-data-G09.sql)
 --   2. runs the assertions  (tests/sample-data/assertions.sql)
 --   3. runs the negative tests (tests/sample-data/negative-tests.sql)
 -- Usage:
@@ -21,7 +21,7 @@ GO
 PRINT '============================================================';
 PRINT 'Phase 1: high-volume sample-data generation';
 PRINT '============================================================';
-:r ..\..\outputs\13-high-volume-sample-data-G09.sql
+:r ..\..\outputs\14-data-generator-G09\high-volume-sample-data-G09.sql
 
 PRINT '============================================================';
 PRINT 'Phase 2: sample-data assertions';

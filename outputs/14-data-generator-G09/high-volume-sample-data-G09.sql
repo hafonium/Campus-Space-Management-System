@@ -1,6 +1,6 @@
 -- ============================================================================
 -- High-volume Sample Data Generation — Campus Space Management System (G09)
--- File: outputs/13-high-volume-sample-data-G09.sql
+-- File: outputs/14-data-generator-G09/high-volume-sample-data-G09.sql
 -- Target: Microsoft SQL Server 2022 (T-SQL), Phase 2 schema
 --          (run after 05-db-definition-G09.sql, 06-sample-data-G09.sql and
 --           10-schema-migration-G09.sql)

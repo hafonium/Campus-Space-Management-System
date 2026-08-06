@@ -3,7 +3,7 @@
 -- File: tests/sample-data/assertions.sql
 -- Purpose: Executable validation suite for the generated high-volume dataset.
 --          Every check must pass; any failed check raises THROW and the run
---          fails. Run AFTER outputs/13-high-volume-sample-data-G09.sql.
+--          fails. Run AFTER outputs/14-data-generator-G09/high-volume-sample-data-G09.sql.
 --
 -- Schema note (Phase 2, per outputs/10-schema-migration-G09.sql):
 --   dbo.ACKNOWLEDGEMENT(booking_id, maintenance_id, acknowledged_at) links a

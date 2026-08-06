@@ -1,12 +1,16 @@
 # Index Tuning Report — Campus Space Management System (G09)
 
-**Dataset:** high-volume sample data (`outputs/13-high-volume-sample-data-G09.sql`)
+**Dataset:** high-volume sample data
+(`outputs/14-data-generator-G09/high-volume-sample-data-G09.sql`)
 100,000 bookings, 2,000 users, 30 spaces, 120 maintenance records, 161,494
 advisory acknowledgement links. SQL Server 2022 (Developer, Docker).
 
-**Benchmark harness:** `outputs/14-index-benchmark-G09.sql` (runs each query on
-the BASE schema, then with candidate indexes; records elapsed ms and logical
-reads via per-plan `dm_exec_query_stats` deltas).
+**Benchmark harness:** each workload query is run against the BASE schema and
+then with the candidate indexes below (in place, `instant plan` + dropped
+indexes between runs). Elapsed ms and logical reads are captured per plan
+handle via `sys.dm_exec_query_stats` deltas, with a warm-up run per stage to
+prime caches; results were stored in `dbo.bench_run` / `dbo.bench_metric` /
+`dbo.bench_detail` for the numbers reported in §2.
 
 ---
 
@@ -70,11 +74,10 @@ the overlap checks and advisory acknowledgement aggregation.
 ## 5. Reproduce
 
 ```bash
-# BASE (schema as-is; drops candidate indexes first)
-sqlcmd -b -i outputs/14-index-benchmark-G09.sql -v IndexStage="BASE"
-# INDEXED (creates candidate indexes first)
-sqlcmd -b -i outputs/14-index-benchmark-G09.sql -v IndexStage="INDEXED"
-# Results are stored in dbo.bench_run / dbo.bench_metric / dbo.bench_detail
+# Generate the dataset (fixed seed 9009; ~9–11 min for 100,000 bookings)
+sqlcmd -b -i outputs/14-data-generator-G09/high-volume-sample-data-G09.sql
+# Then for each stage, drop/create the §1 candidate indexes in a scratch DB and
+# re-run the workload queries from §2, collecting sys.dm_exec_query_stats deltas.
 ```
 
 *Report generated 2026-08-06 against run_id 18 (BASE) and 19 (INDEXED).*
