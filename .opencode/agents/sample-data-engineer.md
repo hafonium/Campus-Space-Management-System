@@ -53,8 +53,7 @@ changing the schema.
 
 Create or update:
 
-- outputs/13-high-volume-sample-data-G09.sql
-- outputs/14-index-benchmark-G09.sql
+- outputs/14-data-generator-G09/high-volume-sample-data-G09.sql
 - outputs/15-index-tuning-report-G09.md
 - tests/sample-data/assertions.sql
 - tests/sample-data/negative-tests.sql
