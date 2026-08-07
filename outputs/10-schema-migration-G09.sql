@@ -30,6 +30,35 @@ CREATE TABLE dbo.ROLE (
 GO
 
 -- ----------------------------------------------------------------------------
+-- [New Entity]: DEPARTMENT
+-- Action: Normalize the department names currently stored on USER. The same
+-- entity is also used by usage policies through an M:N relationship.
+-- ----------------------------------------------------------------------------
+CREATE TABLE dbo.DEPARTMENT (
+    department_id INT IDENTITY(1,1) NOT NULL,
+    department_name VARCHAR(255) NOT NULL,
+    CONSTRAINT pk_department PRIMARY KEY (department_id),
+    CONSTRAINT uq_department_department_name UNIQUE (department_name)
+);
+GO
+
+-- ----------------------------------------------------------------------------
+-- [New Entity]: SEMESTER
+-- Action: Store academic-period definitions. SEMESTER is intentionally not
+-- related to BOOKING in this design.
+-- ----------------------------------------------------------------------------
+CREATE TABLE dbo.SEMESTER (
+    semester_id INT IDENTITY(1,1) NOT NULL,
+    semester_name VARCHAR(100) NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    CONSTRAINT pk_semester PRIMARY KEY (semester_id),
+    CONSTRAINT uq_semester_semester_name UNIQUE (semester_name),
+    CONSTRAINT chk_semester_date_range CHECK (start_date <= end_date)
+);
+GO
+
+-- ----------------------------------------------------------------------------
 -- [New Entity]: ACKNOWLEDGEMENT
 -- Action: Create this entity to store records of users acknowledging advisory 
 -- maintenance warnings during the booking process.
@@ -52,7 +81,6 @@ CREATE TABLE dbo.USAGE_POLICY (
     policy_name VARCHAR(255) NOT NULL,
     max_duration_minutes INT NULL,
     requires_business_hours BIT NULL,
-    department_allowed VARCHAR(255) NULL,
     legacy_policy_text VARCHAR(MAX) NULL,
     CONSTRAINT pk_usage_policy PRIMARY KEY (policy_id),
     CONSTRAINT chk_usage_policy_max_duration_boundary CHECK ([max_duration_minutes] > 0)
@@ -61,28 +89,41 @@ GO
 
 -- ----------------------------------------------------------------------------
 -- [Existing Entity]: USER
--- Action: Extract attribute 'role' into a standalone entity.
+-- Action: Extract 'role' and 'department' into normalized entities.
 -- ----------------------------------------------------------------------------
 -- 1. Migrate distinct roles to the new ROLE table
 INSERT INTO dbo.ROLE (role_name)
 SELECT DISTINCT [role] FROM dbo.[USER];
 GO
 
--- 2. Add the new role_id column
-ALTER TABLE dbo.[USER] ADD role_id INT;
+INSERT INTO dbo.DEPARTMENT (department_name)
+SELECT DISTINCT department
+FROM dbo.[USER]
+WHERE department IS NOT NULL;
 GO
 
--- 3. Update existing records with the corresponding role_id
+-- 2. Add the new foreign-key columns
+ALTER TABLE dbo.[USER] ADD role_id INT, department_id INT;
+GO
+
+-- 3. Update existing records with the corresponding identifiers
 UPDATE u
 SET u.role_id = r.role_id
 FROM dbo.[USER] u
 JOIN dbo.ROLE r ON u.role = r.role_name;
 GO
 
--- 4. Enforce NOT NULL and drop the old text column & constraint
+UPDATE u
+SET u.department_id = d.department_id
+FROM dbo.[USER] u
+JOIN dbo.DEPARTMENT d ON u.department = d.department_name;
+GO
+
+-- 4. Enforce NOT NULL and drop the old text columns and role constraint
 ALTER TABLE dbo.[USER] ALTER COLUMN role_id INT NOT NULL;
+ALTER TABLE dbo.[USER] ALTER COLUMN department_id INT NOT NULL;
 ALTER TABLE dbo.[USER] DROP CONSTRAINT chk_user_role_domain;
-ALTER TABLE dbo.[USER] DROP COLUMN [role];
+ALTER TABLE dbo.[USER] DROP COLUMN [role], department;
 GO
 
 -- ----------------------------------------------------------------------------
@@ -187,6 +228,14 @@ ALTER TABLE dbo.[USER]
 GO
 
 -- ----------------------------------------------------------------------------
+-- DEPARTMENT (OPTIONAL) and USER (MANDATORY) -> 1:N
+-- ----------------------------------------------------------------------------
+ALTER TABLE dbo.[USER]
+    ADD CONSTRAINT fk_user_department
+    FOREIGN KEY (department_id) REFERENCES dbo.DEPARTMENT(department_id);
+GO
+
+-- ----------------------------------------------------------------------------
 -- ROLE (OPTIONAL) and USAGE_POLICY (OPTIONAL) -> M:N
 -- ----------------------------------------------------------------------------
 CREATE TABLE dbo.ROLE_USAGE_POLICY (
@@ -195,6 +244,21 @@ CREATE TABLE dbo.ROLE_USAGE_POLICY (
     CONSTRAINT pk_role_usage_policy PRIMARY KEY (role_id, policy_id),
     CONSTRAINT fk_rup_role FOREIGN KEY (role_id) REFERENCES dbo.ROLE(role_id) ON DELETE CASCADE,
     CONSTRAINT fk_rup_policy FOREIGN KEY (policy_id) REFERENCES dbo.USAGE_POLICY(policy_id) ON DELETE CASCADE
+);
+GO
+
+-- ----------------------------------------------------------------------------
+-- DEPARTMENT (OPTIONAL) and USAGE_POLICY (OPTIONAL) -> M:N
+-- An empty set of departments for a policy means no department restriction.
+-- ----------------------------------------------------------------------------
+CREATE TABLE dbo.DEPARTMENT_USAGE_POLICY (
+    department_id INT NOT NULL,
+    policy_id INT NOT NULL,
+    CONSTRAINT pk_department_usage_policy PRIMARY KEY (department_id, policy_id),
+    CONSTRAINT fk_dup_department FOREIGN KEY (department_id)
+        REFERENCES dbo.DEPARTMENT(department_id) ON DELETE CASCADE,
+    CONSTRAINT fk_dup_policy FOREIGN KEY (policy_id)
+        REFERENCES dbo.USAGE_POLICY(policy_id) ON DELETE CASCADE
 );
 GO
 
@@ -273,7 +337,17 @@ BEGIN
                AND CAST(e.requested_start_time AS TIME) >= '08:00:00'
                AND CAST(e.requested_end_time AS TIME) <= '17:00:00'
                AND CAST(e.requested_start_time AS DATE) = CAST(e.requested_end_time AS DATE)))
-      AND (p.department_allowed IS NULL OR p.department_allowed = u.department)
+      AND (NOT EXISTS (
+               SELECT 1
+               FROM dbo.DEPARTMENT_USAGE_POLICY dp
+               WHERE dp.policy_id = p.policy_id
+           )
+           OR EXISTS (
+               SELECT 1
+               FROM dbo.DEPARTMENT_USAGE_POLICY dp
+               WHERE dp.policy_id = p.policy_id
+                 AND dp.department_id = u.department_id
+           ))
       AND (NOT EXISTS (
                SELECT 1 FROM dbo.ROLE_USAGE_POLICY rp
                WHERE rp.policy_id = p.policy_id

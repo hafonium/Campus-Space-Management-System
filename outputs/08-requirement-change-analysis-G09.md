@@ -4,6 +4,7 @@
 To support the new Phase 2 requirements, the database schema must be updated with new attributes and entities:
 *   **`USER`**
     * **Action:** Extract attribute `role` into a standalone entity and is linked via `role_id`.
+    * **Action:** Replace the free-text `department` attribute with a mandatory relationship to `DEPARTMENT`, implemented through `department_id`.
 *   **`BOOKING`**
     * **Action:** Does not require decision_staff_id for an auto-approval booking.
 *   **`MAINTENANCE_RECORD`**: 
@@ -30,8 +31,14 @@ To support the new Phase 2 requirements, the database schema must be updated wit
         *   `policy_name`: e.g., "Standard Auto-Approve", "Faculty Short Lecture".
         *   `max_duration_minutes` : The maximum allowed booking length to qualify for auto-approval (e.g., 120 minutes).
         *   `requires_business_hours`: If `true`, auto-approval only works during standard operating hours.
-        * `department_allowed`: A space can only be auto-approved by a user from a specific department.
+        *   Remove `allowed_department`/`department_allowed`; allowed departments are represented by a many-to-many relationship between `USAGE_POLICY` and `DEPARTMENT`.
         *   `legacy_policy_text`: Nullable copy of the original Phase 1 `SPACE.usage_policy` text. It preserves existing policy data during migration because free-form text cannot be converted reliably into the structured auto-approval conditions. A policy containing this value is not executable until an administrator configures the structured conditions.
+*   **`SEMESTER`** (New Entity):
+    *   **Action:** Define named academic periods for booking and utilization analysis.
+    *   **Attributes:** `semester_id`, `semester_name`, `start_date`, `end_date`.
+*   **`DEPARTMENT`** (New Entity):
+    *   **Action:** Normalize department data shared by users and usage policies.
+    *   **Attributes:** `department_id`, `department_name`.
 
 ### 1.1. Migration Approach for Existing Usage Policies
 
@@ -51,7 +58,11 @@ The extraction of usage policies and the addition of acknowledgements require ne
 
 *   **`ROLE` (OPTIONAL) and `USAGE_POLICY` (OPTIONAL)**: Introduce a Many-to-Many (**M:N**) relationship. A usage policy might only allow some specific roles or might not. A role does not have to be listed in a usage policy.
 
-## 3. Business Rules 
+*   **`DEPARTMENT` (OPTIONAL) and `USER` (MANDATORY)**: Introduce a One-to-Many (**1:N**) relationship. Each user belongs to exactly one department; a department may have zero or many users.
+
+*   **`DEPARTMENT` (OPTIONAL) and `USAGE_POLICY` (OPTIONAL)**: Introduce a Many-to-Many (**M:N**) relationship, resolved by `DEPARTMENT_USAGE_POLICY` in the logical schema. A policy may allow zero or many departments, and a department may be allowed by zero or many policies.
+
+## 3. Business Rules
 
 ### 3.1. Modified Business Rules (Updates from Phase 1)
 *   **Updated Rule 2 (Maintenance Blocks):** A space that is temporarily closed, retired, or under maintenance with an `out-of-service` impact level cannot be booked for any time period that overlaps the maintenance period. However, if the maintenance has an `advisory` impact level, the space can still be booked.
@@ -65,6 +76,8 @@ The extraction of usage policies and the addition of acknowledgements require ne
 *   **Rule 17 (Impact Escalation):** The impact level of a maintenance record may be escalated (e.g., from `advisory` to `out-of-service`) or downgraded while the maintenance is still open.
 *   **Rule 18 (Escalation Resolution):** If an `advisory` maintenance is escalated to `out-of-service`, the system must identify all already-approved bookings that overlap the maintenance period so that staff can contact the affected requesters.
 *   **Rule 19 (Concurrency Safety):** The system must ensure that two approved bookings cannot use the same space during overlapping time periods, regardless of whether the bookings are created through instant booking or staff approval. This rule must remain valid even when multiple users or staff members perform operations simultaneously.
+*   **Rule 20 (Semester Dates):** A semester's `start_date` must not be later than its `end_date`.
+*   **Rule 21 (Allowed Departments):** If a usage policy has department restrictions, the requester's department must be associated with that policy through `DEPARTMENT_USAGE_POLICY`. A policy with no department associations is unrestricted by department.
 
 ## 4. Concurrency Conflicts Analysis
 The introduction of auto-approval and dynamic maintenance statuses creates several potential race conditions that the system must safely handle:
