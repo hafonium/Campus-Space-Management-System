@@ -34,6 +34,14 @@ DELETE FROM dbo.MAINTENANCE_RECORD;
 DELETE FROM dbo.[USER];
 IF OBJECT_ID('dbo.gen_user_marker', 'U') IS NOT NULL
     DELETE FROM dbo.gen_user_marker;
+IF OBJECT_ID('dbo.gen_policy_marker', 'U') IS NOT NULL
+    DELETE FROM dbo.gen_policy_marker;
+IF OBJECT_ID('dbo.gen_space_marker', 'U') IS NOT NULL
+    DELETE FROM dbo.gen_space_marker;
+IF OBJECT_ID('dbo.gen_facility_marker', 'U') IS NOT NULL
+    DELETE FROM dbo.gen_facility_marker;
+IF OBJECT_ID('dbo.gen_maintenance_marker', 'U') IS NOT NULL
+    DELETE FROM dbo.gen_maintenance_marker;
 DELETE FROM dbo.SPACE;
 DELETE FROM dbo.USAGE_POLICY;
 DELETE FROM dbo.FACILITY;

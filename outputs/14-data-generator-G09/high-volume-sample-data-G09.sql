@@ -16,11 +16,13 @@
 -- indices are derived arithmetically from digit-based number tables (no
 -- ROW_NUMBER over unordered rows), and user/staff ids are resolved through
 -- explicit id maps instead of relying on IDENTITY allocation order.
---   Generated prefix markers: @hcmus.ed.edu.vn emails (users), GSP-<n> (spaces),
---   [GEN] (descriptions). Vietnamese names/departments are drawn deterministically
---   from surname-middle-given lists (see Wikipedia: Vietnamese names).
+--   All user-facing values are realistic (Vietnamese, no diacritics):
+--   names, departments, phones (09x/03x/07x/08x), emails @hcmus.edu.vn,
+--   buildings (Khu A..D), space codes, facilities, policies and notes.
+--   Nothing carries marker text; generated rows are tracked in persistent
+--   dbo.gen_*_marker tables (PK/identity-based) so re-runs can clean up.
 --   Users: PRIMARY email = <surname-initial><middle-initial><given> + user_id
---   e.g. "Le Gia Phúc" -> lgphuc<user_id>@hcmus.edu.vn; if that address would
+--   e.g. "Le Gia Phuc" -> lgphuc<user_id>@hcmus.edu.vn; if that address would
 --   already be taken, falls back to <admission-year><dept-code><seq> mailbox
 --   e.g. "24 01 0042".
 -- Rerunnable: cleanup deletes only previously generated rows; the
@@ -54,16 +56,25 @@ IF @BatchSize < 10000
     THROW 53002, 'BatchSize must be at least 10000.', 1;
 
 -- ============================================================================
--- 1. CLEANUP — delete only previously generated rows
---    Generated users are tracked in dbo.gen_user_marker because their real
---    e-mail (@hcmus.edu.vn) and phone (0xx...) cannot be recognized as
---    markers after Step 10 finalizes them.
+-- 1. CLEANUP — delete only previously generated rows.
+--    Realistic values cannot carry marker text, so every generated row is
+--    tracked by dbo.gen_*_marker tables (persistent, driven by PK/identity).
+--    Cleanup always follows child -> parent order.
 -- ============================================================================
 PRINT 'Step 1: cleanup of previously generated rows';
 
 IF OBJECT_ID('dbo.gen_user_marker', 'U') IS NULL
     EXEC ('CREATE TABLE dbo.gen_user_marker (user_id INT NOT NULL PRIMARY KEY)');
+IF OBJECT_ID('dbo.gen_policy_marker', 'U') IS NULL
+    EXEC ('CREATE TABLE dbo.gen_policy_marker (policy_id INT NOT NULL PRIMARY KEY)');
+IF OBJECT_ID('dbo.gen_space_marker', 'U') IS NULL
+    EXEC ('CREATE TABLE dbo.gen_space_marker (space_code VARCHAR(50) NOT NULL PRIMARY KEY)');
+IF OBJECT_ID('dbo.gen_facility_marker', 'U') IS NULL
+    EXEC ('CREATE TABLE dbo.gen_facility_marker (facility_id INT NOT NULL PRIMARY KEY)');
+IF OBJECT_ID('dbo.gen_maintenance_marker', 'U') IS NULL
+    EXEC ('CREATE TABLE dbo.gen_maintenance_marker (maintenance_id INT NOT NULL PRIMARY KEY)');
 
+-- 1a. ACKNOWLEDGEMENT (children of generated bookings / maintenance)
 DELETE a
 FROM dbo.ACKNOWLEDGEMENT a
 WHERE EXISTS (SELECT 1 FROM dbo.BOOKING b
@@ -71,29 +82,40 @@ WHERE EXISTS (SELECT 1 FROM dbo.BOOKING b
                 AND b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker))
    OR EXISTS (SELECT 1 FROM dbo.MAINTENANCE_RECORD m
               WHERE m.maintenance_id = a.maintenance_id
-                AND m.problem_description LIKE '[[]GEN]%');
+                AND m.maintenance_id IN (SELECT maintenance_id FROM dbo.gen_maintenance_marker));
 
+-- 1b. ROLE_USAGE_POLICY linked to generated policies
 DELETE rp
 FROM dbo.ROLE_USAGE_POLICY rp
-WHERE EXISTS (SELECT 1 FROM dbo.USAGE_POLICY p
-              WHERE p.policy_id = rp.policy_id AND p.policy_name LIKE '[[]GEN]%');
+WHERE rp.policy_id IN (SELECT policy_id FROM dbo.gen_policy_marker);
 
+-- 1c. SPACE_FACILITY for generated spaces or facilities
 DELETE sf
 FROM dbo.SPACE_FACILITY sf
-WHERE EXISTS (SELECT 1 FROM dbo.SPACE s
-              WHERE s.space_code = sf.space_code AND s.space_code LIKE 'GSP-%');
+WHERE sf.space_code IN (SELECT space_code FROM dbo.gen_space_marker)
+   OR sf.facility_id IN (SELECT facility_id FROM dbo.gen_facility_marker);
 
-DELETE FROM dbo.MAINTENANCE_RECORD WHERE problem_description LIKE '[[]GEN]%';
+-- 1d. maintenance first, then bookings
+DELETE FROM dbo.MAINTENANCE_RECORD
+WHERE maintenance_id IN (SELECT maintenance_id FROM dbo.gen_maintenance_marker);
 
 DELETE b
 FROM dbo.BOOKING b
-WHERE b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker);
+WHERE b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker)
+   OR b.space_code IN (SELECT space_code FROM dbo.gen_space_marker);
 
-DELETE FROM dbo.SPACE WHERE space_code LIKE 'GSP-%';
+-- 1e. parent rows
+DELETE FROM dbo.SPACE WHERE space_code IN (SELECT space_code FROM dbo.gen_space_marker);
 DELETE FROM dbo.[USER] WHERE user_id IN (SELECT user_id FROM dbo.gen_user_marker);
+DELETE FROM dbo.USAGE_POLICY WHERE policy_id IN (SELECT policy_id FROM dbo.gen_policy_marker);
+DELETE FROM dbo.FACILITY WHERE facility_id IN (SELECT facility_id FROM dbo.gen_facility_marker);
+
+-- clear the markers for the new run
 DELETE FROM dbo.gen_user_marker;
-DELETE FROM dbo.USAGE_POLICY WHERE policy_name LIKE '[[]GEN]%';
-DELETE FROM dbo.FACILITY WHERE facility_name LIKE '[[]GEN]%';
+DELETE FROM dbo.gen_policy_marker;
+DELETE FROM dbo.gen_space_marker;
+DELETE FROM dbo.gen_facility_marker;
+DELETE FROM dbo.gen_maintenance_marker;
 
 -- ============================================================================
 -- 2. DETERMINISTIC SCHEDULING CALENDAR
@@ -217,7 +239,19 @@ WITH NUMS(n) AS (
 )
 INSERT INTO dbo.stg_gen_policy
 SELECT n,
-       '[GEN] Policy ' + CAST(n + 1 AS VARCHAR(10)),
+       CASE n % 12
+           WHEN 0 THEN 'Chinh sach dat phong co ban'
+           WHEN 1 THEN 'Chinh sach su dung trong gio hanh chinh'
+           WHEN 2 THEN 'Chinh sach su dung ngoai gio hanh chinh'
+           WHEN 3 THEN 'Chinh sach su dung cuoi tuan'
+           WHEN 4 THEN 'Chinh sach giang duong'
+           WHEN 5 THEN 'Chinh sach phong may tinh'
+           WHEN 6 THEN 'Chinh sach phong thi nghiem'
+           WHEN 7 THEN 'Chinh sach phong hop'
+           WHEN 8 THEN 'Chinh sach hoi thao va su kien'
+           WHEN 9 THEN 'Chinh sach sinh hoat doan hoi'
+           WHEN 10 THEN 'Chinh sach on thi va hoc nhom'
+           ELSE 'Chinh sach kiem tra va thi cu' END,
        120 + ((n * 47) % 180),
        CASE WHEN n % 2 = 0 THEN 1 ELSE 0 END,
        NULL,
@@ -231,6 +265,12 @@ INSERT INTO dbo.USAGE_POLICY (policy_name, max_duration_minutes,
 SELECT policy_name, max_duration_minutes, requires_business_hours,
        department_allowed, legacy_policy_text
 FROM dbo.stg_gen_policy;
+
+-- Track the generated policies for the next cleanup run.
+INSERT INTO dbo.gen_policy_marker (policy_id)
+SELECT pol.policy_id
+FROM dbo.USAGE_POLICY pol
+JOIN dbo.stg_gen_policy s ON s.policy_name = pol.policy_name;
 
 -- ----------------------------------------------------------------------------
 -- 3.2 ROLE_USAGE_POLICY (deterministic links)
@@ -300,14 +340,23 @@ WITH NUMS(n) AS (
 )
 INSERT INTO dbo.stg_gen_space
 SELECT n,
-       'GSP-' + CAST(n + 1 AS VARCHAR(10)),
-       'Generated Space ' + CAST(n + 1 AS VARCHAR(10)) + ' [GEN]',
+       -- realistic room code, e.g. 'A101' (Khu A, floor 1, room 01)
+       CHAR(65 + (n % 4))
+         + CAST((n / 4) % 3 + 1 AS VARCHAR(2))
+         + RIGHT('00' + CAST((n / 12) + 1 AS VARCHAR(3)), 2) AS space_code,
+       -- realistic Vietnamese name, e.g. 'Phong hoc A101'
+       CASE n % 6
+           WHEN 0 THEN 'Giang duong' WHEN 1 THEN 'Phong hoc' WHEN 2 THEN 'Phong may tinh'
+           WHEN 3 THEN 'Phong thi nghiem' WHEN 4 THEN 'Phong hop' ELSE 'Khu hoc tap' END
+         + ' ' + CHAR(65 + (n % 4))
+         + CAST((n / 4) % 3 + 1 AS VARCHAR(2))
+         + RIGHT('00' + CAST((n / 12) + 1 AS VARCHAR(3)), 2) AS space_name,
        CASE n % 6
            WHEN 0 THEN 'auditorium' WHEN 1 THEN 'classroom' WHEN 2 THEN 'computer_lab'
            WHEN 3 THEN 'project_lab' WHEN 4 THEN 'meeting_room' ELSE 'student_workspace' END,
-       'GEN-Block-' + CAST((n / 10) % 3 + 1 AS VARCHAR(10)),
-       (n % 4) + 1,
-       'G-' + CAST(n + 1 AS VARCHAR(10)),
+       'Khu ' + CHAR(65 + (n % 4)) AS building,
+       (n / 4) % 3 + 1 AS floor,
+       CAST((n / 12) + 1 AS VARCHAR(10)) AS room_number,
        20 + ((n * 37) % 180),
        CASE WHEN n % 7 = 0 THEN 'in_use' ELSE 'available' END,
        (SELECT TOP 1 policy_id FROM dbo.USAGE_POLICY p
@@ -322,24 +371,35 @@ SELECT space_code, space_name, space_type, building, floor, room_number,
        capacity, current_status, policy_id
 FROM dbo.stg_gen_space;
 
+-- Track the generated spaces for the next cleanup run.
+INSERT INTO dbo.gen_space_marker (space_code)
+SELECT space_code FROM dbo.stg_gen_space;
+
 -- ----------------------------------------------------------------------------
 -- 3.4 FACILITY + SPACE_FACILITY
 -- ----------------------------------------------------------------------------
 PRINT 'Step 3.4: facilities and space-facility links';
 
+-- Realistic Vietnamese facility names (distinct from the English demo rows
+-- in 06-sample-data-G09.sql).
 INSERT INTO dbo.FACILITY (facility_name)
-SELECT '[GEN] Facility ' + CAST(i AS VARCHAR(10))
-FROM (VALUES (1),(2),(3),(4)) v(i)
+SELECT v.facility_name
+FROM (VALUES ('May chieu'),('Bang trang'),('Loa am thanh'),('Dieu hoa')) v(facility_name)
 WHERE NOT EXISTS (SELECT 1 FROM dbo.FACILITY f
-                  WHERE f.facility_name = '[GEN] Facility ' + CAST(v.i AS VARCHAR(10)));
+                  WHERE f.facility_name = v.facility_name);
+
+-- Track the generated facilities for the next cleanup run.
+INSERT INTO dbo.gen_facility_marker (facility_id)
+SELECT f.facility_id FROM dbo.FACILITY f
+WHERE f.facility_name IN ('May chieu','Bang trang','Loa am thanh','Dieu hoa');
 
 IF OBJECT_ID('tempdb..#gen_facility') IS NOT NULL DROP TABLE #gen_facility;
-SELECT facility_id,
-       ROW_NUMBER() OVER (ORDER BY facility_id) AS fac_idx,
+SELECT f.facility_id,
+       ROW_NUMBER() OVER (ORDER BY f.facility_id) AS fac_idx,
        COUNT(*) OVER () AS fac_count
 INTO #gen_facility
-FROM dbo.FACILITY
-WHERE facility_name LIKE '[[]GEN]%';
+FROM dbo.FACILITY f
+JOIN dbo.gen_facility_marker m ON m.facility_id = f.facility_id;
 
 INSERT INTO dbo.SPACE_FACILITY (space_code, facility_id)
 SELECT s.space_code, f.facility_id
@@ -527,7 +587,7 @@ INSERT INTO dbo.stg_gen_maintenance (
 SELECT s.space_code,
        (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 37) % @UserCount),
        (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 13) % 100),
-       '[GEN] Advisory maintenance window A for ' + s.space_code,
+       'Kiem tra dinh ky he thong dien, den chieu - ' + s.space_code,
        CAST(DATEADD(HOUR, 8, CAST(w.wd_date AS DATETIME2)) AS DATETIME2),
        NULL,
        'in_progress',
@@ -539,7 +599,7 @@ UNION ALL
 SELECT s.space_code,
        (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 37 + 11) % @UserCount),
        (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 13 + 7) % 100),
-       '[GEN] Advisory maintenance window B for ' + s.space_code,
+       'Kiem tra dinh ky dieu hoa va thong gio - ' + s.space_code,
        CAST(DATEADD(HOUR, 8, CAST(w.wd_date AS DATETIME2)) AS DATETIME2),
        NULL,
        'reported',
@@ -557,7 +617,7 @@ INSERT INTO dbo.stg_gen_maintenance (
 SELECT s.space_code,
        (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 41 + 3) % @UserCount),
        (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 17) % 100),
-       '[GEN] Out-of-service maintenance weekend W for ' + s.space_code,
+       'Bao tri tong ve sinh phong, kiem thet bi - ' + s.space_code,
        CAST(DATEADD(HOUR, 8, CAST(w.sa_date AS DATETIME2)) AS DATETIME2),
        CAST(DATEADD(HOUR, 20, CAST(DATEADD(DAY, 1, w.sa_date) AS DATETIME2)) AS DATETIME2),
        'in_progress',
@@ -569,22 +629,29 @@ UNION ALL
 SELECT s.space_code,
        (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 41 + 5) % @UserCount),
        (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 17 + 9) % 100),
-       '[GEN] Out-of-service maintenance weekend X for ' + s.space_code,
+       'Bao tri he thong dien va thiet bi - ' + s.space_code,
        CAST(DATEADD(HOUR, 8, CAST(w.sa_date AS DATETIME2)) AS DATETIME2),
        CAST(DATEADD(HOUR, 20, CAST(DATEADD(DAY, 1, w.sa_date) AS DATETIME2)) AS DATETIME2),
        'completed',
-       '[GEN] Out-of-service work finished',
+       'Da hoan tat bao tri, phong san sang su dung lai',
        'out-of-service'
 FROM dbo.stg_gen_space s
 JOIN #saturdays w ON w.sa_ord = ((s.space_idx + 13) % @SaturdayCount);
 
+-- Capture the identity values of every row we just inserted so the next
+-- cleanup run can find them again (no marker text in the data).
+DECLARE @gen_maint_ids TABLE (maintenance_id INT NOT NULL);
 INSERT INTO dbo.MAINTENANCE_RECORD (
     space_code, reporter_id, assigned_staff_id, problem_description,
     start_time, completion_time, status, result_note, impact_level
 )
+OUTPUT INSERTED.maintenance_id INTO @gen_maint_ids
 SELECT space_code, reporter_id, assigned_staff_id, problem_description,
        start_time, completion_time, status, result_note, impact_level
 FROM dbo.stg_gen_maintenance;
+
+INSERT INTO dbo.gen_maintenance_marker (maintenance_id)
+SELECT maintenance_id FROM @gen_maint_ids;
 
 -- ============================================================================
 -- 5. BOOKING STAGING
@@ -634,18 +701,24 @@ SELECT
     CASE WHEN sv.status IN ('approved', 'rejected')
          THEN DATEADD(HOUR, -3, src.req_start) END AS decision_time,
     CASE WHEN sv.status IN ('approved', 'rejected')
-         THEN '[GEN] decision: ' + sv.status END AS decision_note,
+         THEN CASE WHEN sv.status = 'approved' THEN 'Duyet yeu cau dat phong'
+                   ELSE 'Khong duyet yeu cau dat phong' END END AS decision_note,
     CASE WHEN sv.status = 'rejected'
-         THEN '[GEN] rejection reason ' + CAST(src.h_cancel % 5 AS VARCHAR(10)) END AS rejection_reason,
+         THEN CASE src.h_cancel % 5
+                  WHEN 0 THEN 'Phong da co lich su dung'
+                  WHEN 1 THEN 'Thoi gian yeu cau vuot qua gio hanh chinh'
+                  WHEN 2 THEN 'Hoat dong khong phu hop voi loai phong'
+                  WHEN 3 THEN 'Thong tin yeu cau chua day du'
+                  ELSE 'So nguoi tham gia vuot suc chua' END END AS rejection_reason,
     CASE WHEN sv.status IN ('checked_in', 'completed')
          THEN DATEADD(MINUTE, 5 + (src.h_minutes % 10), src.req_start) END AS actual_start_time,
     CASE WHEN sv.status IN ('checked_in', 'completed') THEN cs.user_id END AS check_in_staff_id,
-    CASE WHEN sv.status IN ('checked_in', 'completed') THEN '[GEN] clean and ready' END AS initial_condition,
+    CASE WHEN sv.status IN ('checked_in', 'completed') THEN 'Phong sach se, thiet bi day du' END AS initial_condition,
     CASE WHEN sv.status = 'completed'
          THEN DATEADD(MINUTE, 5 + (src.h_minutes % 10), src.req_end) END AS actual_end_time,
     CASE WHEN sv.status = 'completed' THEN cs.user_id END AS completion_staff_id,
-    CASE WHEN sv.status = 'completed' THEN '[GEN] left in good condition' END AS final_condition,
-    CASE WHEN sv.status = 'completed' THEN '[GEN] normal usage' END AS usage_notes
+    CASE WHEN sv.status = 'completed' THEN 'Ban giao lai, tinh trang tot' END AS final_condition,
+    CASE WHEN sv.status = 'completed' THEN 'Su dung dung muc dich da dang ky' END AS usage_notes
 FROM (
     SELECT
         n,
@@ -905,11 +978,11 @@ FROM dbo.BOOKING b
 JOIN dbo.[USER] u ON u.user_id = b.requester_id
 WHERE u.email LIKE 'gen-%@campus.example';
 
-SELECT impact_level, status, COUNT_BIG(*) AS cnt
-FROM dbo.MAINTENANCE_RECORD
-WHERE problem_description LIKE '[[]GEN]%'
-GROUP BY impact_level, status
-ORDER BY impact_level, status;
+SELECT m.impact_level, m.status, COUNT_BIG(*) AS cnt
+FROM dbo.MAINTENANCE_RECORD m
+JOIN dbo.gen_maintenance_marker g ON g.maintenance_id = m.maintenance_id
+GROUP BY m.impact_level, m.status
+ORDER BY m.impact_level, m.status;
 
 PRINT 'High-volume generation complete.';
 
