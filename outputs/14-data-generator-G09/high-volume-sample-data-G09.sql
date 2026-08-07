@@ -225,6 +225,16 @@ FROM dbo.stg_gen_policy;
 -- ----------------------------------------------------------------------------
 PRINT 'Step 3.2: role-usage-policy links';
 
+-- Ensure the six standard roles exist (idempotent; they are normally
+-- back-filled from dbo.[USER] by 10-schema-migration-G09.sql, but the
+-- generator must not depend on that having run).
+INSERT INTO dbo.ROLE (role_name)
+SELECT v.role_name
+FROM (VALUES ('student'), ('lecturer'), ('teaching_assistant'),
+             ('department_administrator'), ('facility_staff'),
+             ('facility_manager')) v(role_name)
+WHERE NOT EXISTS (SELECT 1 FROM dbo.ROLE r WHERE r.role_name = v.role_name);
+
 DECLARE @RoleStudent INT = (SELECT role_id FROM dbo.ROLE WHERE role_name = 'student');
 DECLARE @RoleLecturer INT = (SELECT role_id FROM dbo.ROLE WHERE role_name = 'lecturer');
 DECLARE @RoleTA INT = (SELECT role_id FROM dbo.ROLE WHERE role_name = 'teaching_assistant');
