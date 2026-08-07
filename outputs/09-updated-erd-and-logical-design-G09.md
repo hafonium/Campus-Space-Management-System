@@ -14,15 +14,23 @@ erDiagram
         string full_name
         string email
         string phone_number
-        string department
         string account_status
+    }
+    DEPARTMENT {
+        integer department_id PK
+        string department_name
+    }
+    SEMESTER {
+        integer semester_id PK
+        string semester_name
+        date start_date
+        date end_date
     }
     USAGE_POLICY {
         integer policy_id PK
         string policy_name
         integer max_duration_minutes
         boolean requires_business_hours
-        string department_allowed
         string legacy_policy_text
     }
     SPACE {
@@ -70,6 +78,8 @@ erDiagram
 
     ROLE ||--|{ USER : assigned_to
     ROLE }o--o{ USAGE_POLICY : permitted_by
+    DEPARTMENT ||--o{ USER : has
+    DEPARTMENT }o--o{ USAGE_POLICY : allowed_by
     USAGE_POLICY o|--|{ SPACE : applied_to
     SPACE o|--o{ FACILITY : contains
     SPACE ||--o{ BOOKING : hosts
@@ -96,8 +106,15 @@ erDiagram
     *   `full_name` — string
     *   `email` — string
     *   `phone_number` — string
-    *   `department` — string
     *   `account_status` — string
+*   **DEPARTMENT**
+    *   `department_id` (PK) — int
+    *   `department_name` — string
+*   **SEMESTER**
+    *   `semester_id` (PK) — int
+    *   `semester_name` — string
+    *   `start_date` — date
+    *   `end_date` — date
 *   **SPACE**
     *   `space_code` (PK) — string
     *   `space_name` — string
@@ -138,7 +155,6 @@ erDiagram
     *   `policy_name` — string
     *   `max_duration_minutes` — int
     *   `requires_business_hours` — boolean
-    *   `department_allowed` — string
     *   `legacy_policy_text` — nullable string containing the preserved Phase 1 free-text usage policy; it is retained for migration traceability and is not evaluated as an auto-approval condition
 *   **ACKNOWLEDGEMENT**
     *   `acknowledged_at` — datetime
@@ -159,6 +175,8 @@ erDiagram
 | SPACE | 1 : N | FACILITY | contains | Space optional; Facility optional | Each space may contain zero or many facilities; each facility may exist in at most one space. |
 | USAGE_POLICY | 1 : N | SPACE | applied_to | Policy optional; Space mandatory | A space can have 0 or 1 usage policy, and a specific usage policy must be applied to at least one space. |
 | ROLE | M : N | USAGE_POLICY | permitted_by | Role optional; Policy optional | A usage policy might only allow some specific roles or might not, and a role does not have to be listed in a usage policy. |
+| DEPARTMENT | 1 : N | USER | has | Department optional; User mandatory | Each user belongs to exactly one department; a department may have zero or many users. |
+| DEPARTMENT | M : N | USAGE_POLICY | allowed_by | Department optional; Policy optional | A policy may allow zero or many departments, and a department may be allowed by zero or many policies. No associated departments means no department restriction. |
 | BOOKING | 1 : N | ACKNOWLEDGEMENT | records | Booking optional; Ack mandatory | A booking may have zero or many acknowledgements; each acknowledgement belongs to exactly one booking. |
 | MAINTENANCE_RECORD | 1 : N | ACKNOWLEDGEMENT | concerns | MR optional; Ack mandatory | A maintenance record may be referenced by zero or many acknowledgements; each acknowledgement concerns exactly one maintenance record. |
 
@@ -181,8 +199,20 @@ Table USER {
   email varchar(255) [not null, unique]
   phone_number varchar(20) [not null, unique]
   role_id integer [not null]
-  department varchar(255) [not null]
+  department_id integer [not null]
   account_status varchar(50) [not null, default: 'active']
+}
+
+Table DEPARTMENT {
+  department_id integer [pk, increment]
+  department_name varchar(255) [not null, unique]
+}
+
+Table SEMESTER {
+  semester_id integer [pk, increment]
+  semester_name varchar(100) [not null, unique]
+  start_date date [not null]
+  end_date date [not null, note: 'Must be greater than or equal to start_date']
 }
 
 Table USAGE_POLICY {
@@ -190,8 +220,16 @@ Table USAGE_POLICY {
   policy_name varchar(255) [not null]
   max_duration_minutes integer
   requires_business_hours boolean
-  department_allowed varchar(255)
   legacy_policy_text text
+}
+
+Table DEPARTMENT_USAGE_POLICY {
+  department_id integer [not null]
+  policy_id integer [not null]
+
+  Indexes {
+    (department_id, policy_id) [pk, name: 'pk_department_usage_policy']
+  }
 }
 
 Table ROLE_USAGE_POLICY {
@@ -275,12 +313,19 @@ Table ACKNOWLEDGEMENT {
 // USER referencing ROLE
 Ref: USER.role_id > ROLE.role_id
 
+// USER referencing DEPARTMENT
+Ref: USER.department_id > DEPARTMENT.department_id
+
 // SPACE referencing USAGE_POLICY
 Ref: SPACE.policy_id > USAGE_POLICY.policy_id
 
 // ROLE_USAGE_POLICY junction table (M:N between ROLE and USAGE_POLICY)
 Ref: ROLE_USAGE_POLICY.role_id > ROLE.role_id [delete: cascade]
 Ref: ROLE_USAGE_POLICY.policy_id > USAGE_POLICY.policy_id [delete: cascade]
+
+// DEPARTMENT_USAGE_POLICY junction table (M:N between DEPARTMENT and USAGE_POLICY)
+Ref: DEPARTMENT_USAGE_POLICY.department_id > DEPARTMENT.department_id [delete: cascade]
+Ref: DEPARTMENT_USAGE_POLICY.policy_id > USAGE_POLICY.policy_id [delete: cascade]
 
 // FACILITY referencing SPACE (1:N containment)
 Ref: FACILITY.space_code > SPACE.space_code [delete: cascade]
@@ -313,6 +358,9 @@ Ref: ACKNOWLEDGEMENT.maintenance_record_id > MAINTENANCE_RECORD.maintenance_id [
 
 **USER Domain Checks:**
 * *(Note: Constraint Role was removed because now role is an entity.)*
+
+**SEMESTER Domain Checks:**
+* **`chk_semester_date_range`**: `CHECK ([start_date] <= [end_date])`
 
 **BOOKING Domain Checks:**
 * **`chk_booking_decision_fields`**: `CHECK (([booking_status] <> 'rejected' OR ([decision_staff_id] IS NOT NULL AND [decision_time] IS NOT NULL AND [decision_note] IS NOT NULL)) AND ([booking_status] <> 'approved' OR [decision_time] IS NOT NULL))`
