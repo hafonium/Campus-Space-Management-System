@@ -16,8 +16,13 @@
 -- indices are derived arithmetically from digit-based number tables (no
 -- ROW_NUMBER over unordered rows), and user/staff ids are resolved through
 -- explicit id maps instead of relying on IDENTITY allocation order.
---   Generated prefixes: gen-<n>@campus.example (users), GSP-<n> (spaces),
---   GEN-<n> (phones), [GEN] (descriptions).
+--   Generated prefix markers: @hcmus.ed.edu.vn emails (users), GSP-<n> (spaces),
+--   [GEN] (descriptions). Vietnamese names/departments are drawn deterministically
+--   from surname-middle-given lists (see Wikipedia: Vietnamese names).
+--   Users: PRIMARY email = <surname-initial><middle-initial><given> + user_id
+--   e.g. "Le Gia Phúc" -> lgphuc<user_id>@hcmus.edu.vn; if that address would
+--   already be taken, falls back to <admission-year><dept-code><seq> mailbox
+--   e.g. "24 01 0042".
 -- Rerunnable: cleanup deletes only previously generated rows; the
 --   hand-written demonstration rows from 06-sample-data-G09.sql are kept.
 --
@@ -50,13 +55,20 @@ IF @BatchSize < 10000
 
 -- ============================================================================
 -- 1. CLEANUP — delete only previously generated rows
+--    Generated users are tracked in dbo.gen_user_marker because their real
+--    e-mail (@hcmus.edu.vn) and phone (0xx...) cannot be recognized as
+--    markers after Step 10 finalizes them.
 -- ============================================================================
 PRINT 'Step 1: cleanup of previously generated rows';
 
+IF OBJECT_ID('dbo.gen_user_marker', 'U') IS NULL
+    EXEC ('CREATE TABLE dbo.gen_user_marker (user_id INT NOT NULL PRIMARY KEY)');
+
 DELETE a
 FROM dbo.ACKNOWLEDGEMENT a
-WHERE EXISTS (SELECT 1 FROM dbo.BOOKING b JOIN dbo.[USER] u ON u.user_id = b.requester_id
-              WHERE b.booking_id = a.booking_id AND u.email LIKE 'gen-%@campus.example')
+WHERE EXISTS (SELECT 1 FROM dbo.BOOKING b
+              WHERE b.booking_id = a.booking_id
+                AND b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker))
    OR EXISTS (SELECT 1 FROM dbo.MAINTENANCE_RECORD m
               WHERE m.maintenance_id = a.maintenance_id
                 AND m.problem_description LIKE '[[]GEN]%');
@@ -75,11 +87,11 @@ DELETE FROM dbo.MAINTENANCE_RECORD WHERE problem_description LIKE '[[]GEN]%';
 
 DELETE b
 FROM dbo.BOOKING b
-WHERE EXISTS (SELECT 1 FROM dbo.[USER] u
-              WHERE u.user_id = b.requester_id AND u.email LIKE 'gen-%@campus.example');
+WHERE b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker);
 
 DELETE FROM dbo.SPACE WHERE space_code LIKE 'GSP-%';
-DELETE FROM dbo.[USER] WHERE email LIKE 'gen-%@campus.example';
+DELETE FROM dbo.[USER] WHERE user_id IN (SELECT user_id FROM dbo.gen_user_marker);
+DELETE FROM dbo.gen_user_marker;
 DELETE FROM dbo.USAGE_POLICY WHERE policy_name LIKE '[[]GEN]%';
 DELETE FROM dbo.FACILITY WHERE facility_name LIKE '[[]GEN]%';
 
@@ -346,11 +358,57 @@ CREATE TABLE dbo.stg_gen_user (
     user_idx INT NOT NULL,
     full_name VARCHAR(255) NOT NULL,
     email VARCHAR(255) NOT NULL,
+    email_local VARCHAR(255) NOT NULL,
     phone_number VARCHAR(20) NOT NULL,
     role_id INT NOT NULL,
     department VARCHAR(255) NOT NULL,
     account_status VARCHAR(50) NOT NULL
 );
+
+-- ----------------------------------------------------------------------------
+-- Vietnamese name/reference lists (ASCII transliteration so they survive the
+-- Latin-1 collation). Structure follows Wikipedia: Vietnamese names,
+-- surname + middle + given. Vietnamese initials+given produce the e-mail
+-- local part, e.g. "Le Gia Phuc" -> l + g + phuc = "lgphuc".
+-- ----------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#vn_surname') IS NOT NULL DROP TABLE #vn_surname;
+CREATE TABLE #vn_surname (vn_id INT NOT NULL PRIMARY KEY, vn_name VARCHAR(60) NOT NULL);
+INSERT INTO #vn_surname (vn_id, vn_name) VALUES
+ (1,'Nguyen'),(2,'Tran'),(3,'Le'),(4,'Pham'),(5,'Hoang'),(6,'Huynh'),
+ (7,'Phan'),(8,'Vu'),(9,'Vo'),(10,'Dang'),(11,'Bui'),(12,'Do'),
+ (13,'Ho'),(14,'Ngo'),(15,'Duong'),(16,'Ly'),(17,'Dinh'),(18,'Truong'),
+ (19,'To'),(20,'Lam'),(21,'Trinh'),(22,'Phung'),(23,'Doan'),(24,'Bao');
+
+IF OBJECT_ID('tempdb..#vn_middle') IS NOT NULL DROP TABLE #vn_middle;
+CREATE TABLE #vn_middle (vn_id INT NOT NULL PRIMARY KEY, vn_name VARCHAR(60) NOT NULL);
+INSERT INTO #vn_middle (vn_id, vn_name) VALUES
+(1,'Van'),(2,'Thi'),(3,'Minh'),(4,'Gia'),(5,'Huu'),(6,'Cong'),
+(7,'Hong'),(8,'Thanh'),(9,'Ngoc'),(10,'Quoc');
+
+IF OBJECT_ID('tempdb..#vn_given') IS NOT NULL DROP TABLE #vn_given;
+CREATE TABLE #vn_given (vn_id INT NOT NULL PRIMARY KEY, vn_name VARCHAR(60) NOT NULL);
+INSERT INTO #vn_given (vn_id, vn_name) VALUES
+(1,'Anh'),(2,'An'),(3,'Bao'),(4,'Binh'),(5,'Cuong'),(6,'Duc'),(7,'Duy'),
+(8,'Hanh'),(9,'Hieu'),(10,'Hoa'),(11,'Hung'),(12,'Huy'),(13,'Huong'),
+(14,'Kien'),(15,'Khoa'),(16,'Linh'),(17,'Long'),(18,'Mai'),(19,'Minh'),
+(20,'Ngan'),(21,'Ngoc'),(22,'Phuc'),(23,'Phuong'),(24,'Quan'),(25,'Son'),
+(26,'Tai'),(27,'Tam'),(28,'Thang'),(29,'Thao'),(30,'Thu'),(31,'Trang'),
+(32,'Trung'),(33,'Tuan'),(34,'Tu'),(35,'Vy'),(36,'Yen');
+
+-- HCMC University of Science - the ten (10) teaching/department bodies
+IF OBJECT_ID('tempdb..#vn_dept') IS NOT NULL DROP TABLE #vn_dept;
+CREATE TABLE #vn_dept (vn_id INT NOT NULL PRIMARY KEY, vn_name VARCHAR(120) NOT NULL);
+INSERT INTO #vn_dept (vn_id, vn_name) VALUES
+(1,'Khoa Toan - Tin hoc'),
+(2,'Khoa Cong nghe Thong tin'),
+(3,'Khoa Vat ly - Vat ly ky thuat'),
+(4,'Khoa Hoa hoc'),
+(5,'Khoa Sinh hoc - Cong nghe Sinh hoc'),
+(6,'Khoa Moi truong'),
+(7,'Khoa Dia chat'),
+(8,'Khoa Khoa hoc va Cong nghe Vat lieu'),
+(9,'Khoa Dien tu - Vien thong'),
+(10,'Khoa Khoa hoc Lieu ngan');
 
 WITH NUMS(n) AS (
     SELECT d1.v*1000 + d2.v*100 + d3.v*10 + d4.v
@@ -367,20 +425,33 @@ WITH NUMS(n) AS (
                 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7
                 UNION ALL SELECT 8 UNION ALL SELECT 9) d4
 )
-INSERT INTO dbo.stg_gen_user
-SELECT n,
-       'Generated User ' + CAST(n + 1 AS VARCHAR(10)),
-       'gen-' + CAST(n + 1 AS VARCHAR(10)) + '@campus.example',
-       'GEN-' + CAST(n + 1 AS VARCHAR(10)),
-       CASE WHEN n < 60 THEN @RoleStaff
-            WHEN n < 100 THEN @RoleManager
-            WHEN n < 210 THEN @RoleAdmin
-            WHEN n < 310 THEN @RoleLecturer
-            WHEN n < 400 THEN @RoleTA
-            ELSE @RoleStudent END,
-       'Department ' + CAST((n % 12) + 1 AS VARCHAR(10)),
-       CASE WHEN n % 97 = 0 THEN 'suspended' ELSE 'active' END
+INSERT INTO dbo.stg_gen_user (user_idx, full_name, email, email_local,
+                              phone_number, role_id, department, account_status)
+SELECT
+    n,
+    s.vn_name + ' ' + m.vn_name + ' ' + g.vn_name AS full_name,
+    'gen-' + CAST(n + 1 AS VARCHAR(10)) + '@campus.example' AS email,
+    LOWER(LEFT(s.vn_name, 1) + LEFT(m.vn_name, 1) + g.vn_name) AS email_local,
+    -- realistic Vietnamese mobile number: 09x/03x/07x/08x + 8 digits
+    CASE n % 4
+        WHEN 0 THEN '09'
+        WHEN 1 THEN '03'
+        WHEN 2 THEN '07'
+        ELSE '08' END
+        + RIGHT('00000000' + CAST(((n * 17 + 3) % 10000000 + 1000000) AS VARCHAR(20)), 8),
+    CASE WHEN n < 60 THEN @RoleStaff
+         WHEN n < 100 THEN @RoleManager
+         WHEN n < 210 THEN @RoleAdmin
+         WHEN n < 310 THEN @RoleLecturer
+         WHEN n < 400 THEN @RoleTA
+         ELSE @RoleStudent END,
+    d.vn_name AS department,
+    CASE WHEN n % 97 = 0 THEN 'suspended' ELSE 'active' END
 FROM NUMS
+JOIN #vn_surname s ON s.vn_id = (n % 24) + 1
+JOIN #vn_middle m ON m.vn_id = ((n / 4) % 10) + 1
+JOIN #vn_given g ON g.vn_id = ((n / 40) % 36) + 1
+JOIN #vn_dept d ON d.vn_id = (n % 10) + 1
 WHERE n < @UserCount;
 
 -- facility_staff (0..59) and facility_manager (60..99) inserted first so the
@@ -396,6 +467,11 @@ SELECT full_name, email, phone_number, role_id, department, account_status
 FROM dbo.stg_gen_user
 WHERE user_idx >= 100
 ORDER BY user_idx;
+
+-- Track generated users for the next cleanup run (emails are still the marker
+-- here; Step 10 will replace them with real @hcmus.edu.vn addresses).
+INSERT INTO dbo.gen_user_marker (user_id)
+SELECT user_id FROM dbo.[USER] WHERE email LIKE 'gen-%@campus.example';
 
 -- Deterministic id maps (do not rely on IDENTITY allocation order)
 IF OBJECT_ID('tempdb..#user_map') IS NOT NULL DROP TABLE #user_map;
@@ -836,6 +912,49 @@ GROUP BY impact_level, status
 ORDER BY impact_level, status;
 
 PRINT 'High-volume generation complete.';
+
+-- ----------------------------------------------------------------------------
+-- 10. FINAL EMAIL FINALIZATION - realistic HCMVNU addresses
+--   Primary    : <surname-initial><middle-initial><given><user_id>@hcmus.edu.vn
+--                e.g. "lgphuc42@hcmus.edu.vn"
+--   Fallback   : used only if the primary address is already taken
+--                <semester><department><sequence>@hcmus.edu.vn
+--                e.g. "24010042@hcmus.edu.vn"  (semester 24, dept 01, no. 0042)
+--   Cleanup on future re-runs relies on dbo.gen_user_marker, since both
+--   e-mail and phone are now real and cannot act as markers.
+-- ----------------------------------------------------------------------------
+PRINT 'Step 10: finalize real email addresses';
+
+IF OBJECT_ID('tempdb..#final_user_email') IS NOT NULL DROP TABLE #final_user_email;
+WITH src AS (
+    SELECT um.user_id,
+           s.user_idx,
+           s.email_local,
+           ((s.user_idx % 10) + 1) AS dept_no
+    FROM dbo.stg_gen_user s
+    JOIN #user_map um ON um.user_idx = s.user_idx
+)
+SELECT user_id,
+       LOWER(email_local) + CAST(user_id AS VARCHAR(10)) + '@hcmus.edu.vn' AS primary_email,
+       '24'
+         + RIGHT('00' + CAST(dept_no AS VARCHAR(2)), 2)
+         + RIGHT('0000' + CAST(ROW_NUMBER() OVER (PARTITION BY dept_no ORDER BY user_id) AS VARCHAR(4)), 4)
+         + '@hcmus.edu.vn' AS fallback_email
+INTO #final_user_email
+FROM src;
+
+-- Apply primary address unless the primary address is already taken
+UPDATE u
+SET u.email = CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM dbo.[USER] x
+                        WHERE x.user_id <> u.user_id AND x.email = f.primary_email)
+                   THEN f.primary_email
+                   ELSE f.fallback_email END
+FROM dbo.[USER] u
+JOIN #final_user_email f ON f.user_id = u.user_id
+WHERE EXISTS (SELECT 1 FROM dbo.gen_user_marker m WHERE m.user_id = u.user_id);
+
+PRINT 'Generated user addresses use @hcmus.edu.vn.';
 
 -- ============================================================================
 -- cleanup of staging tables
