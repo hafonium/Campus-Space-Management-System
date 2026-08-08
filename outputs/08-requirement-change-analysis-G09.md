@@ -20,10 +20,7 @@ To support the new Phase 2 requirements, the database schema must be updated wit
         *   `role_name`: e.g., "Staff", "Student".
 *   **`ACKNOWLEDGEMENT`** (New Entity):
     *   **Action:** Create this entity to store records of users acknowledging advisory maintenance warnings during the booking process.
-        *   `booking_id`: Links to the booking
-        *   `maintenance_record_id`: Links to the specific 
-        `MAINTENANCE_RECORD` (must be `advisory`) that was active at the time.
-        *   `acknowledged_at`: Used to check 
+        *   `acknowledged_at`: Used to store user acknowledgement time.
 *   **`USAGE_POLICY`** (New Entity):
     *   **Action:** Create this entity to manage dynamic rules that determine auto-approval eligibility for spaces.
     *   **Attributes:**
@@ -31,14 +28,19 @@ To support the new Phase 2 requirements, the database schema must be updated wit
         *   `policy_name`: e.g., "Standard Auto-Approve", "Faculty Short Lecture".
         *   `max_duration_minutes` : The maximum allowed booking length to qualify for auto-approval (e.g., 120 minutes).
         *   `requires_business_hours`: If `true`, auto-approval only works during standard operating hours.
-        *   Remove `allowed_department`/`department_allowed`; allowed departments are represented by a many-to-many relationship between `USAGE_POLICY` and `DEPARTMENT`.
         *   `legacy_policy_text`: Nullable copy of the original Phase 1 `SPACE.usage_policy` text. It preserves existing policy data during migration because free-form text cannot be converted reliably into the structured auto-approval conditions. A policy containing this value is not executable until an administrator configures the structured conditions.
 *   **`SEMESTER`** (New Entity):
     *   **Action:** Define named academic periods for booking and utilization analysis.
-    *   **Attributes:** `semester_id`, `semester_name`, `start_date`, `end_date`.
+    *   **Attributes:** 
+        *   `semester_id`: Unique identifier for the semester. 
+        *   `semester_name`: Name of the semester.
+        *   `start_date`: start date of the semester.
+        *   `end_date`: end date of the semester
 *   **`DEPARTMENT`** (New Entity):
     *   **Action:** Normalize department data shared by users and usage policies.
-    *   **Attributes:** `department_id`, `department_name`.
+    *   **Attributes:** 
+        *   `department_id`: Unique identifier for the department
+        *   `department_name`: Name of the department.
 
 ### 1.1. Migration Approach for Existing Usage Policies
 
@@ -48,11 +50,10 @@ Each distinct Phase 1 `SPACE.usage_policy` value is inserted into `USAGE_POLICY.
 The extraction of usage policies and the addition of acknowledgements require new structural relationships:
 
 *   **`SPACE` (OPTIONAL) and `USAGE_POLICY` (MANDATORY)** : Introduce a Many-to-One (**N:1**) relationship. A space can have 0 or 1 usage policy, and a specific usage policy **MUST** be applied to at least one space.
-*   **`BOOKING` (OPTIONAL) and `ACKNOWLEDGEMENT` (MANDATORY)** : Introduce a Many-to-Many (**M:N**) relationship. A single booking may require some acknowledgements, and an acknowledgement must belong to some bookings.
 
 *   **`ACKNOWLEDGEMENT` (MANDATORY) and `MAINTENANCE_RECORD` (OPTIONAL)**: Introduce a Many-to-One (**N:1**) relationship. An acknowledgement belong to a maintenance record.
 
-**`ACKNOWLEDGEMENT` (MANDATORY) and `BOOKING` (OPTIONAL)**: Introduce Many-to-One (**N:1**) relationship. An acknowledgement must be stored with a booking.
+*   **`ACKNOWLEDGEMENT` (MANDATORY) and `BOOKING` (OPTIONAL)**: Introduce Many-to-One (**N:1**) relationship. An acknowledgement must be stored with a booking.
 
 *   **`ROLE` (MANDATORY) and `USER` (MANDATORY)**: Introduce a One-to-Many (**1:N**) relationship. A user must have a role and a role must belong to at least one user.
 
