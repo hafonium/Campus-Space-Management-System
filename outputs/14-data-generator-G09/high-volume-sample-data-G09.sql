@@ -8,6 +8,8 @@
 -- Generates a deterministic high-volume dataset:
 --   - 100,000 bookings by default (range 100,000 .. 500,000)
 --   - at least three complete academic years
+--   - two realistic SEMESTER rows per academic year (SEMESTER remains
+--     intentionally independent of BOOKING)
 --   - maintenance records (advisory and out-of-service)
 --   - cancellations, no-shows, rejections, completions, check-ins
 --   - advisory acknowledgements for every overlapping booking
@@ -28,11 +30,26 @@
 -- Rerunnable: cleanup deletes only previously generated rows; the
 --   hand-written demonstration rows from 06-sample-data-G09.sql are kept.
 --
--- NOTE: the whole script runs as a single batch (no GO separators) so that
--- parameters declared at the top stay in scope.
+-- NOTE: after the schema preflight, the generation body runs as a single batch
+-- so that parameters declared at the top stay in scope.
 -- ============================================================================
 
 USE CampusSpaceManagementSystem;
+GO
+
+-- Fail before SQL Server compiles references in the generator body when the
+-- revised Phase 2 migration has not yet been applied to this database.
+IF OBJECT_ID('dbo.DEPARTMENT', 'U') IS NULL
+   OR OBJECT_ID('dbo.SEMESTER', 'U') IS NULL
+   OR OBJECT_ID('dbo.DEPARTMENT_USAGE_POLICY', 'U') IS NULL
+   OR COL_LENGTH('dbo.USER', 'department_id') IS NULL
+   OR COL_LENGTH('dbo.USAGE_POLICY', 'department_allowed') IS NOT NULL
+BEGIN
+    ;THROW 53003,
+        'Schema is not current. Run outputs/10-schema-migration-G09.sql before the high-volume data generator.',
+        1;
+END;
+GO
 
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -89,13 +106,18 @@ DELETE rp
 FROM dbo.ROLE_USAGE_POLICY rp
 WHERE rp.policy_id IN (SELECT policy_id FROM dbo.gen_policy_marker);
 
--- 1c. SPACE_FACILITY for generated spaces or facilities
+-- 1c. DEPARTMENT_USAGE_POLICY linked to generated policies
+DELETE dp
+FROM dbo.DEPARTMENT_USAGE_POLICY dp
+WHERE dp.policy_id IN (SELECT policy_id FROM dbo.gen_policy_marker);
+
+-- 1d. SPACE_FACILITY for generated spaces or facilities
 DELETE sf
 FROM dbo.SPACE_FACILITY sf
 WHERE sf.space_code IN (SELECT space_code FROM dbo.gen_space_marker)
    OR sf.facility_id IN (SELECT facility_id FROM dbo.gen_facility_marker);
 
--- 1d. maintenance first, then bookings
+-- 1e. maintenance first, then bookings
 DELETE FROM dbo.MAINTENANCE_RECORD
 WHERE maintenance_id IN (SELECT maintenance_id FROM dbo.gen_maintenance_marker);
 
@@ -104,7 +126,7 @@ FROM dbo.BOOKING b
 WHERE b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker)
    OR b.space_code IN (SELECT space_code FROM dbo.gen_space_marker);
 
--- 1e. parent rows
+-- 1f. parent rows
 DELETE FROM dbo.SPACE WHERE space_code IN (SELECT space_code FROM dbo.gen_space_marker);
 DELETE FROM dbo.[USER] WHERE user_id IN (SELECT user_id FROM dbo.gen_user_marker);
 DELETE FROM dbo.USAGE_POLICY WHERE policy_id IN (SELECT policy_id FROM dbo.gen_policy_marker);
@@ -203,6 +225,51 @@ PRINT '  Calendar: ' + CONVERT(VARCHAR(10), @CalStart) + ' .. '
     + CONVERT(VARCHAR(10), @CalEnd) + '  weekdays=' + CAST(@WeekdayCount AS VARCHAR(10))
     + '  spaces=' + CAST(@SpaceCount AS VARCHAR(10));
 
+-- Two teaching semesters per academic year. These rows describe the academic
+-- calendar but are deliberately not linked to individual bookings.
+IF OBJECT_ID('tempdb..#gen_semester') IS NOT NULL DROP TABLE #gen_semester;
+CREATE TABLE #gen_semester (
+    semester_name VARCHAR(100) NOT NULL PRIMARY KEY,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL
+);
+
+WITH AY(n) AS (
+    SELECT 0
+    UNION ALL
+    SELECT n + 1 FROM AY WHERE n + 1 < @AcademicYearCount
+)
+INSERT INTO #gen_semester (semester_name, start_date, end_date)
+SELECT 'Hoc ky 1 ' + CAST(@FirstAcademicYear + n AS VARCHAR(4)) + '-'
+       + CAST(@FirstAcademicYear + n + 1 AS VARCHAR(4)),
+       DATEFROMPARTS(@FirstAcademicYear + n, 9, 1),
+       DATEFROMPARTS(@FirstAcademicYear + n + 1, 1, 15)
+FROM AY
+UNION ALL
+SELECT 'Hoc ky 2 ' + CAST(@FirstAcademicYear + n AS VARCHAR(4)) + '-'
+       + CAST(@FirstAcademicYear + n + 1 AS VARCHAR(4)),
+       DATEFROMPARTS(@FirstAcademicYear + n + 1, 2, 15),
+       DATEFROMPARTS(@FirstAcademicYear + n + 1, 6, 30)
+FROM AY
+OPTION (MAXRECURSION 0);
+
+UPDATE s
+SET s.start_date = g.start_date,
+    s.end_date = g.end_date
+FROM dbo.SEMESTER s
+JOIN #gen_semester g ON g.semester_name = s.semester_name;
+
+INSERT INTO dbo.SEMESTER (semester_name, start_date, end_date)
+SELECT g.semester_name, g.start_date, g.end_date
+FROM #gen_semester g
+WHERE NOT EXISTS (
+    SELECT 1 FROM dbo.SEMESTER s WHERE s.semester_name = g.semester_name
+);
+
+DECLARE @GeneratedSemesterCount INT;
+SELECT @GeneratedSemesterCount = COUNT(*) FROM #gen_semester;
+PRINT '  semesters ensured: ' + CAST(@GeneratedSemesterCount AS VARCHAR(10));
+
 -- ============================================================================
 -- 3. PARENT TABLES
 -- ============================================================================
@@ -218,7 +285,6 @@ CREATE TABLE dbo.stg_gen_policy (
     policy_name VARCHAR(255) NOT NULL,
     max_duration_minutes INT NULL,
     requires_business_hours BIT NULL,
-    department_allowed VARCHAR(255) NULL,
     legacy_policy_text VARCHAR(MAX) NULL
 );
 
@@ -254,16 +320,14 @@ SELECT n,
            ELSE 'Chinh sach kiem tra va thi cu' END,
        120 + ((n * 47) % 180),
        CASE WHEN n % 2 = 0 THEN 1 ELSE 0 END,
-       NULL,
        NULL
 FROM NUMS
 WHERE n < @PolicyCount;
 
 INSERT INTO dbo.USAGE_POLICY (policy_name, max_duration_minutes,
-                              requires_business_hours, department_allowed,
-                              legacy_policy_text)
+                              requires_business_hours, legacy_policy_text)
 SELECT policy_name, max_duration_minutes, requires_business_hours,
-       department_allowed, legacy_policy_text
+       legacy_policy_text
 FROM dbo.stg_gen_policy;
 
 -- Track the generated policies for the next cleanup run.
@@ -421,7 +485,7 @@ CREATE TABLE dbo.stg_gen_user (
     email_local VARCHAR(255) NOT NULL,
     phone_number VARCHAR(20) NOT NULL,
     role_id INT NOT NULL,
-    department VARCHAR(255) NOT NULL,
+    department_id INT NOT NULL,
     account_status VARCHAR(50) NOT NULL
 );
 
@@ -470,6 +534,31 @@ INSERT INTO #vn_dept (vn_id, vn_name) VALUES
 (9,'Khoa Dien tu - Vien thong'),
 (10,'Khoa Khoa hoc Lieu ngan');
 
+-- Ensure normalized department reference rows exist. Existing migrated
+-- departments are reused by name; only missing departments are inserted.
+INSERT INTO dbo.DEPARTMENT (department_name)
+SELECT d.vn_name
+FROM #vn_dept d
+WHERE NOT EXISTS (
+    SELECT 1 FROM dbo.DEPARTMENT x WHERE x.department_name = d.vn_name
+);
+
+-- Give half of the generated policies explicit department restrictions.
+-- The other half receive no rows and therefore remain unrestricted.
+INSERT INTO dbo.DEPARTMENT_USAGE_POLICY (department_id, policy_id)
+SELECT d.department_id, p.policy_id
+FROM dbo.stg_gen_policy sp
+JOIN dbo.USAGE_POLICY p ON p.policy_name = sp.policy_name
+JOIN #vn_dept vd ON vd.vn_id = (sp.policy_idx % 10) + 1
+JOIN dbo.DEPARTMENT d ON d.department_name = vd.vn_name
+WHERE sp.policy_idx % 2 = 1
+  AND NOT EXISTS (
+      SELECT 1
+      FROM dbo.DEPARTMENT_USAGE_POLICY existing_link
+      WHERE existing_link.department_id = d.department_id
+        AND existing_link.policy_id = p.policy_id
+  );
+
 WITH NUMS(n) AS (
     SELECT d1.v*1000 + d2.v*100 + d3.v*10 + d4.v
     FROM (SELECT 0 AS v UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
@@ -486,7 +575,7 @@ WITH NUMS(n) AS (
                 UNION ALL SELECT 8 UNION ALL SELECT 9) d4
 )
 INSERT INTO dbo.stg_gen_user (user_idx, full_name, email, email_local,
-                              phone_number, role_id, department, account_status)
+                              phone_number, role_id, department_id, account_status)
 SELECT
     n,
     s.vn_name + ' ' + m.vn_name + ' ' + g.vn_name AS full_name,
@@ -505,25 +594,26 @@ SELECT
          WHEN n < 310 THEN @RoleLecturer
          WHEN n < 400 THEN @RoleTA
          ELSE @RoleStudent END,
-    d.vn_name AS department,
+    dep.department_id,
     CASE WHEN n % 97 = 0 THEN 'suspended' ELSE 'active' END
 FROM NUMS
 JOIN #vn_surname s ON s.vn_id = (n % 24) + 1
 JOIN #vn_middle m ON m.vn_id = ((n / 4) % 10) + 1
 JOIN #vn_given g ON g.vn_id = ((n / 40) % 36) + 1
 JOIN #vn_dept d ON d.vn_id = (n % 10) + 1
+JOIN dbo.DEPARTMENT dep ON dep.department_name = d.vn_name
 WHERE n < @UserCount;
 
 -- facility_staff (0..59) and facility_manager (60..99) inserted first so the
 -- staff user ids form a contiguous band starting at @FirstGenUserId.
-INSERT INTO dbo.[USER] (full_name, email, phone_number, role_id, department, account_status)
-SELECT full_name, email, phone_number, role_id, department, account_status
+INSERT INTO dbo.[USER] (full_name, email, phone_number, role_id, department_id, account_status)
+SELECT full_name, email, phone_number, role_id, department_id, account_status
 FROM dbo.stg_gen_user
 WHERE user_idx < 100
 ORDER BY user_idx;
 
-INSERT INTO dbo.[USER] (full_name, email, phone_number, role_id, department, account_status)
-SELECT full_name, email, phone_number, role_id, department, account_status
+INSERT INTO dbo.[USER] (full_name, email, phone_number, role_id, department_id, account_status)
+SELECT full_name, email, phone_number, role_id, department_id, account_status
 FROM dbo.stg_gen_user
 WHERE user_idx >= 100
 ORDER BY user_idx;
@@ -963,6 +1053,30 @@ IF EXISTS (SELECT 1 FROM dbo.BOOKING b
              AND (u.user_id IS NULL OR s.space_code IS NULL))
     THROW 53031, 'Generated booking has an orphan reference.', 1;
 
+IF EXISTS (
+    SELECT 1
+    FROM dbo.[USER] u
+    JOIN dbo.gen_user_marker gm ON gm.user_id = u.user_id
+    LEFT JOIN dbo.DEPARTMENT d ON d.department_id = u.department_id
+    WHERE d.department_id IS NULL
+)
+    THROW 53032, 'Generated user has an orphan department reference.', 1;
+
+IF (SELECT COUNT(*)
+    FROM #gen_semester g
+    JOIN dbo.SEMESTER s
+      ON s.semester_name = g.semester_name
+     AND s.start_date = g.start_date
+     AND s.end_date = g.end_date) <> @AcademicYearCount * 2
+    THROW 53033, 'Semester generation did not produce two valid semesters per academic year.', 1;
+
+IF NOT EXISTS (
+    SELECT 1
+    FROM dbo.DEPARTMENT_USAGE_POLICY dp
+    WHERE dp.policy_id IN (SELECT policy_id FROM dbo.gen_policy_marker)
+)
+    THROW 53034, 'Generated policies have no department restrictions.', 1;
+
 SELECT booking_status, COUNT_BIG(*) AS cnt,
        CAST(100.0 * COUNT_BIG(*) / SUM(COUNT_BIG(*)) OVER () AS DECIMAL(5,2)) AS pct
 FROM dbo.BOOKING b
@@ -983,6 +1097,18 @@ FROM dbo.MAINTENANCE_RECORD m
 JOIN dbo.gen_maintenance_marker g ON g.maintenance_id = m.maintenance_id
 GROUP BY m.impact_level, m.status
 ORDER BY m.impact_level, m.status;
+
+SELECT s.semester_name, s.start_date, s.end_date
+FROM dbo.SEMESTER s
+JOIN #gen_semester g ON g.semester_name = s.semester_name
+ORDER BY s.start_date;
+
+SELECT p.policy_name, COUNT(dp.department_id) AS allowed_department_count
+FROM dbo.USAGE_POLICY p
+JOIN dbo.gen_policy_marker gm ON gm.policy_id = p.policy_id
+LEFT JOIN dbo.DEPARTMENT_USAGE_POLICY dp ON dp.policy_id = p.policy_id
+GROUP BY p.policy_id, p.policy_name
+ORDER BY p.policy_name;
 
 PRINT 'High-volume generation complete.';
 

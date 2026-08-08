@@ -21,6 +21,7 @@ SET NOCOUNT ON;
 -- [New Entity]: ROLE
 -- Action: Create this entity to store roles for users.
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.ROLE', 'U') IS NULL
 CREATE TABLE dbo.ROLE (
     role_id INT IDENTITY(1,1) NOT NULL,
     role_name VARCHAR(50) NOT NULL,
@@ -34,6 +35,7 @@ GO
 -- Action: Normalize the department names currently stored on USER. The same
 -- entity is also used by usage policies through an M:N relationship.
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.DEPARTMENT', 'U') IS NULL
 CREATE TABLE dbo.DEPARTMENT (
     department_id INT IDENTITY(1,1) NOT NULL,
     department_name VARCHAR(255) NOT NULL,
@@ -47,6 +49,7 @@ GO
 -- Action: Store academic-period definitions. SEMESTER is intentionally not
 -- related to BOOKING in this design.
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.SEMESTER', 'U') IS NULL
 CREATE TABLE dbo.SEMESTER (
     semester_id INT IDENTITY(1,1) NOT NULL,
     semester_name VARCHAR(100) NOT NULL,
@@ -64,6 +67,7 @@ GO
 -- maintenance warnings during the booking process.
 -- (maintenance_id will be linked in Section 2)
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.ACKNOWLEDGEMENT', 'U') IS NULL
 CREATE TABLE dbo.ACKNOWLEDGEMENT (
     booking_id INT NOT NULL,
     maintenance_id INT NOT NULL,
@@ -76,6 +80,7 @@ GO
 -- [New Entity]: USAGE_POLICY
 -- Action: Create this entity to manage dynamic rules that determine auto-approval.
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.USAGE_POLICY', 'U') IS NULL
 CREATE TABLE dbo.USAGE_POLICY (
     policy_id INT IDENTITY(1,1) NOT NULL,
     policy_name VARCHAR(255) NOT NULL,
@@ -92,46 +97,63 @@ GO
 -- Action: Extract 'role' and 'department' into normalized entities.
 -- ----------------------------------------------------------------------------
 -- 1. Migrate distinct roles to the new ROLE table
-INSERT INTO dbo.ROLE (role_name)
-SELECT DISTINCT [role] FROM dbo.[USER];
+IF COL_LENGTH('dbo.USER', 'role') IS NOT NULL
+    EXEC ('INSERT INTO dbo.ROLE (role_name)
+           SELECT DISTINCT u.[role]
+           FROM dbo.[USER] u
+           WHERE u.[role] IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM dbo.ROLE r WHERE r.role_name = u.[role]);');
 GO
 
-INSERT INTO dbo.DEPARTMENT (department_name)
-SELECT DISTINCT department
-FROM dbo.[USER]
-WHERE department IS NOT NULL;
+IF COL_LENGTH('dbo.USER', 'department') IS NOT NULL
+    EXEC ('INSERT INTO dbo.DEPARTMENT (department_name)
+           SELECT DISTINCT u.department
+           FROM dbo.[USER] u
+           WHERE u.department IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM dbo.DEPARTMENT d
+                             WHERE d.department_name = u.department);');
 GO
 
 -- 2. Add the new foreign-key columns
-ALTER TABLE dbo.[USER] ADD role_id INT, department_id INT;
+IF COL_LENGTH('dbo.USER', 'role_id') IS NULL
+    ALTER TABLE dbo.[USER] ADD role_id INT NULL;
+IF COL_LENGTH('dbo.USER', 'department_id') IS NULL
+    ALTER TABLE dbo.[USER] ADD department_id INT NULL;
 GO
 
 -- 3. Update existing records with the corresponding identifiers
-UPDATE u
-SET u.role_id = r.role_id
-FROM dbo.[USER] u
-JOIN dbo.ROLE r ON u.role = r.role_name;
+IF COL_LENGTH('dbo.USER', 'role') IS NOT NULL
+    EXEC ('UPDATE u SET u.role_id = r.role_id
+           FROM dbo.[USER] u JOIN dbo.ROLE r ON u.[role] = r.role_name
+           WHERE u.role_id IS NULL;');
 GO
 
-UPDATE u
-SET u.department_id = d.department_id
-FROM dbo.[USER] u
-JOIN dbo.DEPARTMENT d ON u.department = d.department_name;
+IF COL_LENGTH('dbo.USER', 'department') IS NOT NULL
+    EXEC ('UPDATE u SET u.department_id = d.department_id
+           FROM dbo.[USER] u JOIN dbo.DEPARTMENT d
+             ON u.department = d.department_name
+           WHERE u.department_id IS NULL;');
 GO
 
 -- 4. Enforce NOT NULL and drop the old text columns and role constraint
 ALTER TABLE dbo.[USER] ALTER COLUMN role_id INT NOT NULL;
 ALTER TABLE dbo.[USER] ALTER COLUMN department_id INT NOT NULL;
-ALTER TABLE dbo.[USER] DROP CONSTRAINT chk_user_role_domain;
-ALTER TABLE dbo.[USER] DROP COLUMN [role], department;
+IF OBJECT_ID('dbo.chk_user_role_domain', 'C') IS NOT NULL
+    ALTER TABLE dbo.[USER] DROP CONSTRAINT chk_user_role_domain;
+IF COL_LENGTH('dbo.USER', 'role') IS NOT NULL
+    ALTER TABLE dbo.[USER] DROP COLUMN [role];
+IF COL_LENGTH('dbo.USER', 'department') IS NOT NULL
+    ALTER TABLE dbo.[USER] DROP COLUMN department;
 GO
 
 -- ----------------------------------------------------------------------------
 -- [Existing Entity]: BOOKING
 -- Action: Does not require decision_staff_id for an auto-approval booking.
 -- ----------------------------------------------------------------------------
-ALTER TABLE dbo.BOOKING DROP CONSTRAINT chk_booking_decision_fields;
+IF OBJECT_ID('dbo.chk_booking_decision_fields', 'C') IS NOT NULL
+    ALTER TABLE dbo.BOOKING DROP CONSTRAINT chk_booking_decision_fields;
 GO
+IF OBJECT_ID('dbo.chk_booking_decision_fields', 'C') IS NULL
 ALTER TABLE dbo.BOOKING ADD CONSTRAINT chk_booking_decision_fields
 CHECK (
     ([booking_status] <> 'rejected'
@@ -146,7 +168,8 @@ GO
 -- [Existing Entity]: MAINTENANCE_RECORD
 -- Action: Add a new attribute impact_level ('out-of-service' or 'advisory').
 -- ----------------------------------------------------------------------------
-ALTER TABLE dbo.MAINTENANCE_RECORD ADD impact_level VARCHAR(50);
+IF COL_LENGTH('dbo.MAINTENANCE_RECORD', 'impact_level') IS NULL
+    ALTER TABLE dbo.MAINTENANCE_RECORD ADD impact_level VARCHAR(50) NULL;
 GO
 UPDATE dbo.MAINTENANCE_RECORD 
 SET impact_level = 'out-of-service' 
@@ -154,6 +177,7 @@ WHERE impact_level IS NULL;
 GO
 ALTER TABLE dbo.MAINTENANCE_RECORD ALTER COLUMN impact_level VARCHAR(50) NOT NULL;
 GO
+IF OBJECT_ID('dbo.chk_maintenance_impact_level_domain', 'C') IS NULL
 ALTER TABLE dbo.MAINTENANCE_RECORD 
     ADD CONSTRAINT chk_maintenance_impact_level_domain 
     CHECK (impact_level IN ('out-of-service', 'advisory'));
@@ -168,26 +192,31 @@ GO
 -- later without losing the original data. A migrated legacy policy is therefore an
 -- attached policy, but it will not auto-approve until at least one criterion is set.
 -- ----------------------------------------------------------------------------
-ALTER TABLE dbo.SPACE ADD policy_id INT;
+IF COL_LENGTH('dbo.SPACE', 'policy_id') IS NULL
+    ALTER TABLE dbo.SPACE ADD policy_id INT NULL;
 GO
 
-INSERT INTO dbo.USAGE_POLICY (policy_name, legacy_policy_text)
-SELECT CONCAT('Migrated Phase 1 policy ',
-              ROW_NUMBER() OVER (ORDER BY usage_policy)),
-       usage_policy
-FROM (SELECT DISTINCT usage_policy
-      FROM dbo.SPACE
-      WHERE usage_policy IS NOT NULL) p;
+IF COL_LENGTH('dbo.SPACE', 'usage_policy') IS NOT NULL
+    EXEC ('INSERT INTO dbo.USAGE_POLICY (policy_name, legacy_policy_text)
+           SELECT CONCAT(''Migrated Phase 1 policy '',
+                         ROW_NUMBER() OVER (ORDER BY p.usage_policy)),
+                  p.usage_policy
+           FROM (SELECT DISTINCT usage_policy
+                 FROM dbo.SPACE
+                 WHERE usage_policy IS NOT NULL) p
+           WHERE NOT EXISTS (SELECT 1 FROM dbo.USAGE_POLICY x
+                             WHERE x.legacy_policy_text = p.usage_policy);');
 GO
 
-UPDATE s
-SET s.policy_id = p.policy_id
-FROM dbo.SPACE s
-JOIN dbo.USAGE_POLICY p
-  ON p.legacy_policy_text = s.usage_policy;
+IF COL_LENGTH('dbo.SPACE', 'usage_policy') IS NOT NULL
+    EXEC ('UPDATE s SET s.policy_id = p.policy_id
+           FROM dbo.SPACE s JOIN dbo.USAGE_POLICY p
+             ON p.legacy_policy_text = s.usage_policy
+           WHERE s.policy_id IS NULL;');
 GO
 
-ALTER TABLE dbo.SPACE DROP COLUMN usage_policy;
+IF COL_LENGTH('dbo.SPACE', 'usage_policy') IS NOT NULL
+    ALTER TABLE dbo.SPACE DROP COLUMN usage_policy;
 GO
 
 -- ============================================================================
@@ -197,6 +226,7 @@ GO
 -- ----------------------------------------------------------------------------
 -- SPACE (OPTIONAL) and USAGE_POLICY (MANDATORY) -> N:1
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.fk_space_policy', 'F') IS NULL
 ALTER TABLE dbo.SPACE 
     ADD CONSTRAINT fk_space_policy 
     FOREIGN KEY (policy_id) REFERENCES dbo.USAGE_POLICY(policy_id);
@@ -205,6 +235,7 @@ GO
 -- ----------------------------------------------------------------------------
 -- BOOKING (OPTIONAL) and ACKNOWLEDGEMENT (MANDATORY) -> 1:N
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.fk_ack_booking', 'F') IS NULL
 ALTER TABLE dbo.ACKNOWLEDGEMENT
     ADD CONSTRAINT fk_ack_booking
     FOREIGN KEY (booking_id) REFERENCES dbo.BOOKING(booking_id) ON DELETE CASCADE;
@@ -213,6 +244,7 @@ GO
 -- ----------------------------------------------------------------------------
 -- ACKNOWLEDGEMENT (MANDATORY) and MAINTENANCE_RECORD (OPTIONAL) -> N:1
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.fk_ack_maintenance', 'F') IS NULL
 ALTER TABLE dbo.ACKNOWLEDGEMENT 
     ADD CONSTRAINT fk_ack_maintenance 
     FOREIGN KEY (maintenance_id) REFERENCES dbo.MAINTENANCE_RECORD(maintenance_id)
@@ -222,6 +254,7 @@ GO
 -- ----------------------------------------------------------------------------
 -- ROLE (MANDATORY) and USER (MANDATORY) -> 1:N
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.fk_user_role', 'F') IS NULL
 ALTER TABLE dbo.[USER] 
     ADD CONSTRAINT fk_user_role 
     FOREIGN KEY (role_id) REFERENCES dbo.ROLE(role_id);
@@ -230,6 +263,7 @@ GO
 -- ----------------------------------------------------------------------------
 -- DEPARTMENT (OPTIONAL) and USER (MANDATORY) -> 1:N
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.fk_user_department', 'F') IS NULL
 ALTER TABLE dbo.[USER]
     ADD CONSTRAINT fk_user_department
     FOREIGN KEY (department_id) REFERENCES dbo.DEPARTMENT(department_id);
@@ -238,6 +272,7 @@ GO
 -- ----------------------------------------------------------------------------
 -- ROLE (OPTIONAL) and USAGE_POLICY (OPTIONAL) -> M:N
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.ROLE_USAGE_POLICY', 'U') IS NULL
 CREATE TABLE dbo.ROLE_USAGE_POLICY (
     role_id INT NOT NULL,
     policy_id INT NOT NULL,
@@ -251,6 +286,7 @@ GO
 -- DEPARTMENT (OPTIONAL) and USAGE_POLICY (OPTIONAL) -> M:N
 -- An empty set of departments for a policy means no department restriction.
 -- ----------------------------------------------------------------------------
+IF OBJECT_ID('dbo.DEPARTMENT_USAGE_POLICY', 'U') IS NULL
 CREATE TABLE dbo.DEPARTMENT_USAGE_POLICY (
     department_id INT NOT NULL,
     policy_id INT NOT NULL,
@@ -260,6 +296,35 @@ CREATE TABLE dbo.DEPARTMENT_USAGE_POLICY (
     CONSTRAINT fk_dup_policy FOREIGN KEY (policy_id)
         REFERENCES dbo.USAGE_POLICY(policy_id) ON DELETE CASCADE
 );
+GO
+
+-- Upgrade databases created by an earlier Phase 2 script that stored one
+-- allowed department as USAGE_POLICY.department_allowed. Preserve those
+-- values as normalized departments and junction rows before dropping the
+-- obsolete text column.
+IF COL_LENGTH('dbo.USAGE_POLICY', 'department_allowed') IS NOT NULL
+BEGIN
+    EXEC ('INSERT INTO dbo.DEPARTMENT (department_name)
+           SELECT DISTINCT p.department_allowed
+           FROM dbo.USAGE_POLICY p
+           WHERE p.department_allowed IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM dbo.DEPARTMENT d
+                             WHERE d.department_name = p.department_allowed);');
+
+    EXEC ('INSERT INTO dbo.DEPARTMENT_USAGE_POLICY (department_id, policy_id)
+           SELECT d.department_id, p.policy_id
+           FROM dbo.USAGE_POLICY p
+           JOIN dbo.DEPARTMENT d
+             ON d.department_name = p.department_allowed
+           WHERE p.department_allowed IS NOT NULL
+             AND NOT EXISTS (
+                 SELECT 1 FROM dbo.DEPARTMENT_USAGE_POLICY dp
+                 WHERE dp.department_id = d.department_id
+                   AND dp.policy_id = p.policy_id
+             );');
+
+    EXEC ('ALTER TABLE dbo.USAGE_POLICY DROP COLUMN department_allowed;');
+END;
 GO
 
 -- ============================================================================
@@ -555,7 +620,7 @@ GO
 -- impact changes. Downgrading to advisory creates one acknowledgement for every
 -- overlapping booking; escalating to out-of-service removes those advisory-only
 -- acknowledgements. The timestamp records when the requester is considered informed.
-CREATE TRIGGER dbo.trg_maintenance_sync_acknowledgements
+CREATE OR ALTER TRIGGER dbo.trg_maintenance_sync_acknowledgements
 ON dbo.MAINTENANCE_RECORD
 AFTER UPDATE
 AS
@@ -590,7 +655,7 @@ GO
 
 -- Rule 18: staff can query approved bookings affected by an active
 -- out-of-service maintenance record after escalation.
-CREATE VIEW dbo.vw_approved_bookings_affected_by_outage
+CREATE OR ALTER VIEW dbo.vw_approved_bookings_affected_by_outage
 AS
 SELECT mr.maintenance_id,
        b.booking_id,
