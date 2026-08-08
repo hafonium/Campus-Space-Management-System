@@ -1,91 +1,79 @@
-# Step 15 — Indexing and Query Tuning Report (G09)
+# Step 15 — Index Tuning Report (G09)
 
 ## 1. Objective
 
-This report evaluates indexing for exactly four Phase 2 workloads:
+This report evaluates three candidate indexes for the four fixed Campus Space Management System workloads. It follows the required sequence:
 
-1. Booking conflict check.
-2. Room finder.
-3. Total approved booking hours of each space for a semester.
-4. Number of approved bookings by weekday and hour for a semester.
+`workload -> access pattern -> candidate hypothesis -> controlled benchmark -> actual evidence -> decision`
 
-The comparison uses the real output in `step15-benchmark-output.txt`. BASE and
-INDEXED use the same dataset, query text, parameters, warm-up procedure, and
-five measured executions. No values from the obsolete Step 15 report are used.
+All measurements and Actual Execution Plan evidence in this report come only from the completed run captured in `step15-codex-output.txt`, using `outputs/test-15-index-tuning-benchmark-G09.sql`. No earlier Step 15 measurement or artifact was used. Warm-up executions and representative plan-capture executions are excluded from the measured-run medians.
+
+The final decisions are:
+
+- C1 `ix_booking_overlap_lock`: **KEEP**
+- C2 `ix_g09_booking_semester_reporting`: **KEEP**
+- C3 `ix_g09_maintenance_room_finder`: **REJECT** for the current dataset/workload
 
 ## 2. Dataset and Environment
 
 | Item | Observed value |
-|---|---|
-| DBMS | Microsoft SQL Server 2022 Developer Edition (64-bit) |
-| Server instance | `sqlserver2022` |
-| Product version/level | `16.0.4265.3`, RTM |
-| Database compatibility level | 160 |
+|---|---:|
+| SQL Server | 2022 Developer Edition (64-bit) |
+| Product version | 16.0.4265.3 |
+| Compatibility level | 160 |
 | Recovery model | FULL |
-| Total `BOOKING` rows | 100,022 |
-| Approved/active booking rows | 75,722 |
-| `MAINTENANCE_RECORD` rows | 125 |
-| First booking start | `2023-09-01 08:00:00` |
-| Last booking start | `2026-09-21 14:00:00` |
-| Booking day span | 1,116 days |
-| Measured executions per workload/stage | 5 |
+| Session language / `DATEFIRST` | `us_english` / 7 |
+| BOOKING rows | 100,022 |
+| Strictly `approved` bookings | 14,573 |
+| `approved` / `checked_in` / `completed` bookings | 75,722 |
+| MAINTENANCE_RECORD rows | 125 |
+| Booking date span | 1,116 days, from 2023-09-01 08:00 to 2026-09-21 16:00 |
+| Semesters | 6; all 6 overlap booking data |
 
-Semester coverage uses the final interval-overlap semantics from Step 16:
-
-| Semester ID | Semester | Start | End (inclusive) | Approved/active overlapping rows |
-|---:|---|---|---|---:|
-| 1 | Hoc ky 1 2023-2024 | 2023-09-01 | 2024-01-15 | 12,302 |
-| 4 | Hoc ky 2 2023-2024 | 2024-02-15 | 2024-06-30 | 10,500 |
-| 2 | Hoc ky 1 2024-2025 | 2024-09-01 | 2025-01-15 | 9,942 |
-| 5 | Hoc ky 2 2024-2025 | 2025-02-15 | 2025-06-30 | 9,729 |
-| 3 | Hoc ky 1 2025-2026 | 2025-09-01 | 2026-01-15 | 6,885 |
-| 6 | Hoc ky 2 2025-2026 | 2026-02-15 | 2026-06-30 | 6,779 |
-
-The benchmark completed successfully and printed that original index
-existence and enabled/disabled state had been restored.
+The benchmark preflight passed before any index state changed.
 
 ## 3. Exact Benchmark Parameters
 
-| Parameter | Selected value |
-|---|---|
-| `semester_id` | 1 |
-| `@semester_start` | `2023-09-01 00:00:00` |
-| `@semester_end_exclusive` | `2024-01-16 00:00:00` |
-| Approved/active rows overlapping semester | 12,302 |
-| W1 `@space_code` | `A101` |
-| W1 `@requested_start` | `2025-09-01 08:00:00` |
-| W1 `@requested_end` | `2025-09-01 10:00:00` |
-| W2 `@required_capacity` | 20 |
-| W2 `@start_time` | `2026-06-20 08:00:00` |
-| W2 `@end_time` | `2026-06-20 10:00:00` |
-| W2 parameter maintenance ID | 1 |
-| W2 required facilities | ID 2 — Whiteboard; ID 6 — Air Conditioner |
-| W2 result rows | 6 |
+| Workload | Parameter | Value |
+|---|---|---|
+| W1 | Source approved booking | `booking_id = 3` |
+| W1 | Space | `CR-M3-1006` |
+| W1 | Probe start | `2026-07-10 10:00:00` |
+| W1 | Probe end | `2026-07-10 12:00:00` |
+| W2 | Interval source | Active out-of-service maintenance |
+| W2 | Satisfiable anchor space | `AUD-MC-1000` |
+| W2 | Required capacity | 500 |
+| W2 | Facilities | 1 and 3 |
+| W2 | Start | `2023-09-02 08:00:00` |
+| W2 | End | `2023-09-03 20:00:00` |
+| W2 | Viability result count | 1 space |
+| W3/W4 | Semester | `semester_id = 1` |
+| W3/W4 | Semester start | `2023-09-01 00:00:00` |
+| W3/W4 | Exclusive semester end | `2024-01-16 00:00:00` |
+| W3/W4 | Qualifying bookings | 12,302 |
+
+W1 was selected from a real approved booking across the whole dataset and was not constrained to the reporting semester. W2 used two facilities that co-occur on a real space and returned a non-empty result. W3/W4 used the semester with the greatest qualifying overlap count under the benchmark's deterministic ordering.
 
 ## 4. Existing Indexes Before Tuning
 
-The initial inventory contained the following relevant indexes. Every listed
-index was enabled (`is_disabled = 0`). C2 and C3 did not exist before tuning.
+The relevant initial inventory was:
 
-| Table | Index | Type | Keys | Role |
-|---|---|---|---|---|
-| `BOOKING` | `pk_booking` | Clustered, unique PK | `booking_id` | Integrity |
-| `BOOKING` | `ix_booking_overlap_lock` | Nonclustered | `space_code, booking_status, requested_start_time, requested_end_time` | Concurrency/performance |
-| `MAINTENANCE_RECORD` | `pk_maintenance_record` | Clustered, unique PK | `maintenance_id` | Integrity |
-| `SEMESTER` | `pk_semester` | Clustered, unique PK | `semester_id` | Integrity |
-| `SEMESTER` | `uq_semester_semester_name` | Nonclustered unique constraint | `semester_name` | Integrity |
-| `SPACE` | `pk_space` | Clustered, unique PK | `space_code` | Integrity |
-| `SPACE` | `uq_space_location` | Nonclustered unique | `building, floor, room_number` | Integrity |
-| `SPACE_FACILITY` | `pk_space_facility` | Clustered composite PK | `space_code, facility_id` | Integrity/access path |
+| Table | Index | Type / role | Initial state |
+|---|---|---|---|
+| BOOKING | `pk_booking(booking_id)` | Clustered primary key | Enabled |
+| BOOKING | `ix_booking_overlap_lock(space_code, booking_status, requested_start_time, requested_end_time)` | Nonclustered performance/concurrency index; C1 | Enabled |
+| MAINTENANCE_RECORD | `pk_maintenance_record(maintenance_id)` | Clustered primary key | Enabled |
+| SPACE | `pk_space(space_code)` | Clustered primary key | Enabled |
+| SPACE | `uq_space_location(building, floor, room_number)` | Unique nonclustered index | Enabled |
+| SPACE_FACILITY | `pk_space_facility(space_code, facility_id)` | Clustered primary key | Enabled |
+| SEMESTER | `pk_semester(semester_id)` | Clustered primary key | Enabled |
+| SEMESTER | `uq_semester_semester_name(semester_name)` | Unique constraint index | Enabled |
 
-For a clean BASE, the benchmark temporarily disabled non-unique performance
-indexes, including `ix_booking_overlap_lock`, without dropping PKs, unique
-constraints, or unique integrity indexes. No concurrent booking writes were
-allowed while the concurrency index was disabled.
+C2 and C3 did not exist initially. Candidate-name safety confirmed that the existing C1 definition exactly matched the approved candidate. Integrity indexes were not part of the mutable baseline.
 
 ## 5. Candidate Indexes and Rationale
 
-### C1 — Conflict check and booking overlap
+### C1 — `ix_booking_overlap_lock`
 
 ```sql
 CREATE INDEX ix_booking_overlap_lock
@@ -97,11 +85,9 @@ ON dbo.BOOKING (
 );
 ```
 
-The equality predicates lead the key, followed by the temporal keys. The same
-index also provides the ordered access path needed for Step 12 key-range
-locking, so it serves both concurrency correctness and query performance.
+Why chosen: W1 has equality predicates on `space_code` and `booking_status`, followed by an upper range on `requested_start_time`; `requested_end_time` supplies the second overlap condition, normally as a residual boundary in a conventional B-tree. The same structure is relevant to W2's booking exclusion. It is also the established Step 12 key-range-locking access path.
 
-### C2 — Semester reporting
+### C2 — `ix_g09_booking_semester_reporting`
 
 ```sql
 CREATE INDEX ix_g09_booking_semester_reporting
@@ -113,11 +99,9 @@ ON dbo.BOOKING (
 INCLUDE (requested_end_time);
 ```
 
-The status and start-time keys support the semester reporting predicates.
-`space_code` and included `requested_end_time` cover the reporting columns and
-the second overlap boundary.
+Why chosen: the three reporting statuses form the first search dimension and `requested_start_time` supplies the usable semester boundary. `space_code` supports W3's join/grouping needs, while included `requested_end_time` covers the second overlap condition. W4 derives its grouping expressions from `requested_start_time`.
 
-### C3 — Room-finder maintenance exclusion
+### C3 — `ix_g09_maintenance_room_finder`
 
 ```sql
 CREATE INDEX ix_g09_maintenance_room_finder
@@ -130,248 +114,212 @@ ON dbo.MAINTENANCE_RECORD (
 INCLUDE (completion_time);
 ```
 
-The key follows the space join, equality filters, and temporal boundary while
-covering the nullable maintenance end time. Its value must be judged against
-the very small 125-row maintenance table.
+Why chosen: W2 joins on `space_code`, filters by `impact_level` and `status`, and tests a range on `start_time`. Included `completion_time` covers the remaining interval-overlap condition.
 
-No candidate was added for `SPACE` or `SPACE_FACILITY`: `SPACE` is small and
-the existing `SPACE_FACILITY` composite PK already begins with `space_code`,
-which matches the correlated facility lookup.
+These definitions were hypotheses before the run; their final status is based on the evidence below.
 
 ## 6. Benchmark Methodology
 
-The benchmark performed these operations in one SQL session:
+The script compiled and bound the four frozen canonical query bodies, selected deterministic real-data parameters, and validated W2 before the measured phases. The same query variables and parameter values were used in BASE and INDEXED.
 
-1. Validated volume, booking range, maintenance count, active booking count,
-   and semester coverage.
-2. Printed the original relevant index inventory and deterministic parameters.
-3. Disabled only non-unique, non-constraint performance indexes for BASE.
-4. Warmed W1-W4 once, then captured one Actual Plan per workload.
-5. Ran each BASE workload five times with `STATISTICS IO/TIME` enabled.
-6. Created or rebuilt C1-C3, repeated the warm-up and Actual Plan capture, and
-   ran five INDEXED executions with unchanged queries and parameters.
-7. Restored and verified the original index state.
+For a clean BASE, the benchmark acquired exclusive transaction-held locks on BOOKING and MAINTENANCE_RECORD, then disabled only snapshotted non-unique, non-constraint nonclustered performance indexes on those candidate tables. Primary key, UNIQUE, and other integrity indexes stayed enabled.
 
-The reported CPU and elapsed values are medians of the five query-level timing
-records. The duplicate outer `sp_executesql` timing messages are not counted.
-Logical-read medians are taken from `STATISTICS IO`; physical reads were zero
-in every measured run. Actual Plan capture executions are used for operator
-and rows-read analysis, not for the timing medians.
+Each phase used this order:
+
+1. one warm-up execution of W1–W4 with statistics off;
+2. one representative Actual Execution Plan capture of W1–W4;
+3. five measured runs per workload with `STATISTICS IO` and `STATISTICS TIME` enabled.
+
+The INDEXED phase rebuilt/created C1–C3 and repeated the identical query and parameter protocol. Medians below use only the five explicitly marked measured runs. For timing, the query-level record immediately following each run's `STATISTICS IO` output was used; the duplicate outer `sp_executesql` timing record was excluded.
 
 ## 7. W1 — Booking Conflict Check
 
-W1 tests the approved-booking overlap predicate for `A101` from 08:00 to 10:00
-on 2025-09-01.
-
 ### Five measured runs
 
-| Stage | `BOOKING` reads | CPU ms | Elapsed ms |
-|---|---|---|---|
-| BASE | 2063, 2063, 2063, 2063, 2063 | 7, 7, 7, 7, 7 | 7, 7, 6, 7, 7 |
-| INDEXED | 4, 4, 4, 4, 4 | 0, 0, 0, 0, 0 | 0, 0, 0, 0, 0 |
+| Run | BASE reads | BASE CPU ms | BASE elapsed ms | INDEXED reads | INDEXED CPU ms | INDEXED elapsed ms |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2,062 | 9 | 8 | 3 | 0 | 0 |
+| 2 | 2,062 | 8 | 8 | 3 | 0 | 0 |
+| 3 | 2,062 | 9 | 8 | 3 | 0 | 0 |
+| 4 | 2,062 | 9 | 8 | 3 | 0 | 0 |
+| 5 | 2,062 | 8 | 8 | 3 | 0 | 0 |
+| **Median** | **2,062** | **9** | **8** | **3** | **0** | **0** |
 
-| Metric | BASE median | INDEXED median |
-|---|---:|---:|
-| `BOOKING` logical reads | 2,063 | 4 |
-| CPU time | 7 ms | 0 ms (below timer resolution) |
-| Elapsed time | 7 ms | 0 ms (below timer resolution) |
-| Result rows | 1 aggregate row | 1 aggregate row |
-| Main access | Clustered Index Scan | Index Seek |
-| Index used | `pk_booking` | `ix_booking_overlap_lock` |
-| Key Lookup | None | None |
+The BOOKING read median fell by 2,059 pages, or 99.85%. Indexed CPU and elapsed results were below SQL Server's displayed millisecond timer resolution; they are not literal zero-cost executions.
 
-The BASE plan read all 100,022 booking rows to find one conflict. The INDEXED
-plan sought directly through C1 and read one row. This reduced logical reads by
-99.81%; the zero-millisecond timing is SQL Server timer rounding, not proof of
-literally zero execution cost.
+### Representative Actual Execution Plans
 
-**Decision: KEEP C1.** The logical-read and rows-accessed reductions are
-decisive, and the same index also supports the Step 12 concurrency design and its key-range locking strategy.
+| Phase | BOOKING access | Index | Actual Rows Read | Actual Rows | Operator logical reads | Key Lookup |
+|---|---|---|---:|---:|---:|---|
+| BASE | Clustered Index Scan | `pk_booking` | 100,022 | 1 | 2,062 | None |
+| INDEXED | Index Seek | `ix_booking_overlap_lock` (C1) | 1 | 1 | 3 | None |
+
+The Stream Aggregate remained, while BOOKING access changed from scanning the entire 100,022-row clustered index to a one-row C1 seek. The read and rows-read evidence—not merely the operator-name change—demonstrates a material benefit attributable to C1.
 
 ## 8. W2 — Room Finder
 
-W2 preserves the Step 16 capacity, facility, unavailable-status, booking
-overlap, and active out-of-service maintenance semantics. It returned six
-spaces for the parameters in Section 3.
-
 ### Five measured runs
 
-| Stage | `BOOKING` reads | Total reads | CPU ms | Elapsed ms |
-|---|---|---|---|---|
-| BASE | 78394, 78394, 78394, 78394, 78394 | 78687, 78687, 78687, 78687, 78687 | 895, 890, 897, 905, 887 | 895, 890, 896, 909, 887 |
-| INDEXED | 851, 851, 851, 851, 851 | 1139, 1139, 1139, 1139, 1139 | 21, 19, 21, 21, 20 | 20, 19, 20, 21, 20 |
+| Run | BASE BOOKING reads | BASE maintenance reads | BASE total reads | BASE CPU ms | BASE elapsed ms | INDEXED BOOKING reads | INDEXED maintenance reads | INDEXED total reads | INDEXED CPU ms | INDEXED elapsed ms |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2,062 | 5 | 2,078 | 11 | 10 | 10 | 4 | 25 | 0 | 0 |
+| 2 | 2,062 | 5 | 2,078 | 10 | 9 | 10 | 4 | 25 | 0 | 0 |
+| 3 | 2,062 | 5 | 2,078 | 10 | 10 | 10 | 4 | 25 | 0 | 0 |
+| 4 | 2,062 | 5 | 2,078 | 10 | 10 | 10 | 4 | 25 | 1 | 0 |
+| 5 | 2,062 | 5 | 2,078 | 11 | 10 | 10 | 4 | 25 | 0 | 0 |
+| **Median** | **2,062** | **5** | **2,078** | **10** | **10** | **10** | **4** | **25** | **0** | **0** |
 
-The total is the sum of reads reported for `BOOKING`, `MAINTENANCE_RECORD`,
-`SPACE`, `SPACE_FACILITY`, and `#RequiredFacilities`.
+The unchanged noncandidate reads were 7 for SPACE and 4 for SPACE_FACILITY in every phase. Total reads fell 98.80%, but attribution must be separated:
 
-| Metric | BASE median | INDEXED median |
-|---|---:|---:|
-| `BOOKING` logical reads | 78,394 | 851 |
-| `MAINTENANCE_RECORD` logical reads | 33 | 28 |
-| `SPACE` logical reads | 93 | 93 |
-| `SPACE_FACILITY` logical reads | 90 | 90 |
-| `#RequiredFacilities` logical reads | 77 | 77 |
-| Total query logical reads | 78,687 | 1,139 |
-| CPU time | 895 ms | 21 ms |
-| Elapsed time | 895 ms | 20 ms |
-| Result rows | 6 | 6 |
-| `BOOKING` access | Clustered Index Scan on `pk_booking` | Index Seek on `ix_booking_overlap_lock` |
-| Maintenance access | Clustered Index Scan on `pk_maintenance_record` | Index Seek on `ix_g09_maintenance_room_finder` |
-| Join/set strategy | Nested Loops anti-semi joins implementing `EXCEPT` | Nested Loops anti-semi joins implementing `EXCEPT` |
-| Key Lookup | None | None |
+- C1 reduced BOOKING reads from 2,062 to 10, a 2,052-read (99.52%) reduction.
+- C3 reduced MAINTENANCE_RECORD reads from 5 to 4, only one logical read on a 125-row table.
+- Indexed CPU and elapsed medians were below the displayed millisecond resolution. The joint candidate phase does not permit that timing change to be divided reliably between C1 and C3.
 
-The BASE plan repeatedly scanned `BOOKING` for candidate spaces, reading
-3,800,836 rows in the Actual Plan and producing 78,394 logical reads. With C1,
-SQL Server performed targeted seeks by space/status/time, reading 71,131 rows
-and only 851 pages. `BOOKING` reads fell 98.91%, total reads fell 98.55%, and
-median elapsed time fell from 895 ms to 20 ms.
+### Representative Actual Execution Plans
 
-C3 changed the maintenance access from a clustered scan to a seek and reduced
-maintenance reads from 33 to 28. The Actual Plan read one matching maintenance
-row instead of 751 rows across repeated executions, but the page reduction was
-only five reads because `MAINTENANCE_RECORD` has 125 rows. C1 accounts for the
-overwhelming majority of W2's improvement.
+| Branch / phase | Access | Index | Actual Rows Read | Actual Rows | Operator logical reads | Key Lookup |
+|---|---|---|---:|---:|---:|---|
+| BOOKING BASE | Clustered Index Scan | `pk_booking` | 100,022 | 0 | 2,062 | None |
+| BOOKING INDEXED | Index Seek | `ix_booking_overlap_lock` (C1) | Not emitted | 0 | 10 | None |
+| Maintenance BASE | Clustered Index Scan | `pk_maintenance_record` | 125 | 0 | 5 | None |
+| Maintenance INDEXED | Index Seek | `ix_g09_maintenance_room_finder` (C3) | Not emitted | 0 | 4 | None |
 
-**Decisions: KEEP C1; REJECT C3 for the current dataset and defer it until
-maintenance volume grows substantially.**
+SQL Server did not emit `ActualRowsRead` for the two zero-output INDEXED seeks, so no value is inferred. The plan retained nested-loop anti-semi-join processing for the `EXCEPT`/facility logic. C1 and C3 were both genuinely selected, but almost all stable read reduction came from C1.
 
 ## 9. W3 — Approved Booking Hours by Semester
 
-W3 reports all 40 spaces, including zero-hour spaces, using these unchanged
-semester-overlap predicates:
-
-```sql
-requested_end_time > @semester_start
-AND requested_start_time < @semester_end_exclusive
-```
-
 ### Five measured runs
 
-| Stage | `BOOKING` reads | CPU ms | Elapsed ms |
-|---|---|---|---|
-| BASE | 2063, 2063, 2063, 2063, 2063 | 18, 18, 18, 18, 18 | 30, 17, 18, 18, 18 |
-| INDEXED | 583, 580, 583, 580, 583 | 7, 6, 7, 6, 7 | 7, 6, 6, 6, 6 |
+| Run | BASE BOOKING reads | BASE total reads | BASE CPU ms | BASE elapsed ms | INDEXED BOOKING reads | INDEXED total reads | INDEXED CPU ms | INDEXED elapsed ms |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2,062 | 2,148 | 30 | 30 | 83 | 169 | 15 | 15 |
+| 2 | 2,062 | 2,148 | 33 | 33 | 83 | 169 | 16 | 15 |
+| 3 | 2,062 | 2,148 | 31 | 31 | 83 | 169 | 16 | 15 |
+| 4 | 2,062 | 2,148 | 31 | 30 | 83 | 169 | 14 | 14 |
+| 5 | 2,062 | 2,148 | 31 | 30 | 83 | 169 | 15 | 15 |
+| **Median** | **2,062** | **2,148** | **31** | **30** | **83** | **169** | **15** | **15** |
 
-| Metric | BASE median | INDEXED median |
-|---|---:|---:|
-| `BOOKING` logical reads | 2,063 | 583 |
-| `SPACE` logical reads | 2 | 3 |
-| Total query logical reads | 2,065 | 586 |
-| CPU time | 18 ms | 7 ms |
-| Elapsed time | 18 ms | 6 ms |
-| Result rows | 40 | 40 |
-| Booking access | Clustered Index Scan on `pk_booking` | Index Seek on `ix_booking_overlap_lock` |
-| Join/aggregate | Hash Match left join and Hash Aggregate | Nested Loops left join and Stream Aggregate |
-| Key Lookup | None | None |
+Total reads fell 92.13%; BOOKING reads fell 95.97%. Median CPU fell 51.61%, and median elapsed time fell 50%. SPACE remained at 2 reads and SEMESTER remained at 84 reads, so the read improvement is entirely in BOOKING access.
 
-The BASE Actual Plan scanned all 100,022 booking rows. The INDEXED plan used
-C1, not C2, and read the 12,302 qualifying booking rows through repeated seeks
-by `space_code`, status, and start-time boundary. Its plan-capture execution
-used 574 `BOOKING` reads; the five timed executions produced 580 or 583 reads,
-so the reported median is 583. Median `BOOKING` reads fell 71.74%.
+### Representative Actual Execution Plans
 
-This improvement must not be attributed to C2. W3 joins and groups by
-`space_code`, which matches C1's leading key, and the optimizer selected C1 as
-the cheaper access path for this workload.
+| Phase | BOOKING access | Index | Actual Rows Read | Actual Rows | Operator logical reads | Key Lookup |
+|---|---|---|---:|---:|---:|---|
+| BASE | Clustered Index Scan | `pk_booking` | 100,022 | 75,722 | 2,062 | None |
+| INDEXED | Index Seek | `ix_g09_booking_semester_reporting` (C2) | 12,302 | 12,302 | 83 | None |
 
-**Decision for this workload: C1 is beneficial. W3 provides no direct evidence
-for keeping C2; the C2 decision is instead supported by W4.**
+The Hash Match aggregate and Hash Match left outer join remained. C2 performed three status/range seeks, returned exactly the 12,302 qualifying semester rows, and covered the required BOOKING columns without a Key Lookup. C1 was not selected for W3; therefore W3 is evidence for C2, not C1.
 
 ## 10. W4 — Booking Count by Weekday/Hour
 
-W4 returned 25 weekday/hour groups for semester 1 and uses the same
-booking-semester overlap semantics as W3.
-
 ### Five measured runs
 
-| Stage | `BOOKING` reads | CPU ms | Elapsed ms |
-|---|---|---|---|
-| BASE | 2063, 2063, 2063, 2063, 2063 | 14, 14, 14, 15, 14 | 14, 14, 14, 14, 14 |
-| INDEXED | 83, 83, 83, 83, 83 | 3, 4, 4, 3, 4 | 3, 3, 3, 3, 3 |
+| Run | BASE BOOKING reads | BASE total reads | BASE CPU ms | BASE elapsed ms | INDEXED BOOKING reads | INDEXED total reads | INDEXED CPU ms | INDEXED elapsed ms |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2,062 | 2,064 | 28 | 27 | 83 | 85 | 7 | 6 |
+| 2 | 2,062 | 2,064 | 29 | 28 | 83 | 85 | 6 | 5 |
+| 3 | 2,062 | 2,064 | 28 | 28 | 83 | 85 | 6 | 5 |
+| 4 | 2,062 | 2,064 | 28 | 28 | 83 | 85 | 7 | 7 |
+| 5 | 2,062 | 2,064 | 27 | 27 | 83 | 85 | 7 | 6 |
+| **Median** | **2,062** | **2,064** | **28** | **28** | **83** | **85** | **7** | **6** |
 
-| Metric | BASE median | INDEXED median |
-|---|---:|---:|
-| `BOOKING` logical reads | 2,063 | 83 |
-| CPU time | 14 ms | 4 ms |
-| Elapsed time | 14 ms | 3 ms |
-| Result rows | 25 groups | 25 groups |
-| Booking access | Clustered Index Scan on `pk_booking` | Index Seek on `ix_g09_booking_semester_reporting` |
-| Aggregate | Hash Match Aggregate | Hash Match Aggregate |
-| Explicit Sort | None | None |
-| Key Lookup | None | None |
+Total reads fell 95.88%; BOOKING reads fell 95.97%. Median CPU fell 75%, and median elapsed time fell 78.57%.
 
-The BASE scan read all 100,022 bookings. C2 allowed three status/start-time
-seek ranges and read exactly the 12,302 qualifying rows, reducing logical reads
-by 95.98%. The included end time covers the remaining overlap predicate, and
-no Key Lookup was required. Median elapsed time fell from 14 ms to 3 ms.
+### Representative Actual Execution Plans
 
-**Decision: KEEP C2.** W4 supplies direct plan and I/O evidence for the
-semester-reporting index.
+| Phase | BOOKING access | Index | Actual Rows Read | Actual Rows | Operator logical reads | Key Lookup |
+|---|---|---|---:|---:|---:|---|
+| BASE | Clustered Index Scan | `pk_booking` | 100,022 | 75,722 | 2,062 | None |
+| INDEXED | Index Seek | `ix_g09_booking_semester_reporting` (C2) | 12,302 | 12,302 | 83 | None |
+
+The Hash Match aggregate remained. C2 supplied the qualifying rows through three covered status/range seeks, with `requested_end_time` evaluated as the remaining overlap predicate and no Key Lookup. C1 was not selected; W4's benefit belongs to C2.
 
 ## 11. Before vs After Summary
 
-Times are median elapsed times. W2 shows both `BOOKING` and total query reads;
-the other workloads show `BOOKING` reads because other reported reads are zero
-or separately documented above.
+| Workload | BASE median total reads | INDEXED median total reads | Read reduction | BASE median CPU ms | INDEXED median CPU ms | BASE median elapsed ms | INDEXED median elapsed ms | Candidate actually responsible |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| W1 | 2,062 | 3 | 99.85% | 9 | 0* | 8 | 0* | C1 |
+| W2 | 2,078 | 25 | 98.80% | 10 | 0* | 10 | 0* | Primarily C1; C3 saved one maintenance read |
+| W3 | 2,148 | 169 | 92.13% | 31 | 15 | 30 | 15 | C2 |
+| W4 | 2,064 | 85 | 95.88% | 28 | 7 | 28 | 6 | C2 |
 
-| Workload | Base Reads | Indexed Reads | Base Time | Indexed Time | Plan Before | Plan After | Decision |
-|---|---:|---:|---:|---:|---|---|---|
-| W1 — Conflict check | 2,063 | 4 | 7 ms | 0 ms* | Clustered scan, `pk_booking` | Seek, C1 | KEEP C1 |
-| W2 — Room finder | 78,394 BOOKING / 78,687 total | 851 BOOKING / 1,139 total | 895 ms | 20 ms | Repeated BOOKING clustered scans; maintenance clustered scan | C1 BOOKING seeks; C3 maintenance seeks | KEEP C1; REJECT/DEFER C3 |
-| W3 — Booking hours | 2,063 | 583 | 18 ms | 6 ms | Clustered scan, `pk_booking` | Seeks through C1 | C1 beneficial; no C2 attribution |
-| W4 — Weekday/hour count | 2,063 | 83 | 14 ms | 3 ms | Clustered scan, `pk_booking` | Seek through C2 | KEEP C2 |
+`*` Below SQL Server's displayed millisecond timer resolution, not literal zero execution cost.
 
-\* Recorded as 0 ms because the execution was below SQL Server's displayed
-millisecond resolution.
+The optimizer selected C1 only for W1 and W2 BOOKING access, C2 only for W3/W4 BOOKING access, and C3 only for W2 maintenance access. No representative plan contained a Key Lookup.
 
 ## 12. Final Index Decisions
 
-| Candidate | Final decision | Evidence and action |
-|---|---|---|
-| C1 — `ix_booking_overlap_lock` | **KEEP** | W1 reads 2,063→4; W2 BOOKING reads 78,394→851; W3 median BOOKING reads 2,063→583. It also supports Step 12 key-range locking. Retain the existing index. |
-| C2 — `ix_g09_booking_semester_reporting` | **KEEP** | W4 reads 2,063→83, elapsed 14→3 ms, and the Actual Plan uses a covering C2 seek without a Key Lookup. Add it to the final deployment after documenting its write/storage cost. |
-| C3 — `ix_g09_maintenance_room_finder` | **REJECT / DEFER** | Maintenance reads improve only 33→28 on a 125-row table. Do not deploy now; reconsider if maintenance volume or room-finder frequency grows substantially. |
+| Candidate | Decision | Why chosen | Evidence | Trade-off |
+|---|---|---|---|---|
+| C1 `ix_booking_overlap_lock` | **KEEP** | Equality prefix on space/status followed by overlap time boundaries; also required by Step 12 concurrency design | Actually selected for W1 and W2; W1 reads 2,062 -> 3 and rows read 100,022 -> 1; W2 BOOKING reads 2,062 -> 10 | Adds BOOKING write/storage cost, but it already existed, provides decisive read benefit, and has a concurrency role not duplicated by C2's key order |
+| C2 `ix_g09_booking_semester_reporting` | **KEEP** | Status/time access path covering reporting joins, grouping inputs, and second overlap boundary | Actually selected for W3/W4; BOOKING reads 2,062 -> 83; rows read 100,022 -> 12,302; no Key Lookup; CPU/elapsed fell materially | Adds a second four-column BOOKING access path and write/storage amplification; justified here because C1 was not selected for the reporting workloads and cannot replace the measured C2 access path |
+| C3 `ix_g09_maintenance_room_finder` | **REJECT** | Structurally matches W2 maintenance predicates | Actually selected, but maintenance reads improved only 5 -> 4 on 125 rows; total W2 benefit was overwhelmingly C1 | Adds maintenance-write and storage overhead for a one-page measured saving; reconsider only if maintenance volume or workload frequency grows materially |
 
-The report distinguishes optimizer choice from candidate intent: although C2
-was designed for semester reports, SQL Server selected C1 for W3. C2 is kept
-because W4 directly and materially benefits from it.
+### C1 defense
+
+How verified: the optimizer actually used C1, eliminated 2,059 median reads in W1 and 2,052 BOOKING reads in W2, and reduced W1 Actual Rows Read from the full 100,022 rows to one. Its Step 12 concurrency role supplies additional operational justification. **KEEP**.
+
+### C2 defense
+
+How verified: the optimizer actually used C2 for both reporting workloads and did not use C1 there. C2 reduced BOOKING reads by 1,979 pages, limited Actual Rows Read to the 12,302 qualifying rows, avoided Key Lookups, and materially reduced median CPU and elapsed time. **KEEP**.
+
+### C3 defense
+
+How verified: C3 was selected, so it is not rejected for lack of optimizer use. It is rejected because stable evidence shows only one logical read saved on a 125-row table, while the candidate would still impose ongoing write and storage cost. The joint run provides no isolated timing evidence for C3. **REJECT** for the current system; reevaluate if table scale changes.
 
 ## 13. Index Trade-offs
 
-- C1 adds booking-write maintenance, but it is already required by the
-  concurrency implementation and eliminates the need for a near-duplicate
-  overlap index.
-- C2 consumes storage and adds work to booking inserts and updates. Its 95.98%
-  W4 read reduction and covering plan justify that cost for recurring semester
-  reporting.
-- C3 produces a seek, but an operator name alone is insufficient evidence.
-  Only five maintenance-page reads are saved at the current scale, so its
-  storage and write cost are not justified.
-- Scans of `SPACE` and other very small tables remain reasonable. A seek is not
-  inherently better; the decision depends on pages read, rows accessed,
-  execution frequency, and write overhead.
-- Timings at a few milliseconds are resolution- and environment-sensitive.
-  Repeated logical reads and plan row counts are the primary evidence.
+### Read benefit
+
+C1 and C2 serve different leading-key needs. C1 narrows by `space_code` and status for conflict/room exclusion and supports key-range concurrency locking. C2 narrows by status and semester time for reporting. Although they contain the same four explicit BOOKING columns in different key/include arrangements, the actual plans demonstrate that the order is not interchangeable for these workloads.
+
+C3 is covering and was selected, but the maintenance table's 125-row size made the observed benefit negligible. A scan cost of five reads is already small.
+
+### Write amplification
+
+Every retained BOOKING index must be maintained on inserts, deletes, and changes to status, space, or requested times. Keeping both C1 and C2 therefore increases write CPU, log generation, page splits, and maintenance work relative to one index. The benchmark did not measure write throughput, but C1's concurrency role and the distinct, material read benefits of C1/C2 justify that cost for the tested workload.
+
+C3 would likewise require maintenance for changes to space, impact, status, start, and completion values. Its one-read benefit does not justify that recurring cost at current scale.
+
+### Storage
+
+C1 and C2 each store one entry per BOOKING row and carry several variable/fixed-width booking columns plus the clustered key. Exact index page counts and sizes were not captured, so no storage number is invented. Their storage overlap is real but buys two access orders that SQL Server demonstrably selected for different workloads.
+
+C3's absolute storage would be small at 125 rows, but small storage alone is not a reason to retain an index without material workload benefit.
 
 ## 14. Reproduction Instructions
 
-The finalized measurements came from:
+The reproducible benchmark is `outputs/test-15-index-tuning-benchmark-G09.sql`; the analyzed raw output is `step15-codex-output.txt`.
 
-- Benchmark: `outputs/15-index-tuning-benchmark-G09.sql`
-- Captured output: `step15-benchmark-output.txt`
+For a future reproduction—not as part of this analysis-only continuation:
 
-For an independent future reproduction, prepare the Phase 2 database through
-Steps 05, 06, 10, 12, 14, and 16, then execute the benchmark once in a single
-session with no concurrent booking writes. Set `@CaptureActualPlans = 1` to
-emit one BASE and one INDEXED ShowPlan XML for each workload. Preserve the
-Messages output containing all five measured runs.
+1. Prepare the populated `CampusSpaceManagementSystem` database and confirm the preflight requirements.
+2. Use a controlled window with no concurrent BOOKING or MAINTENANCE_RECORD writes; C1 is temporarily disabled for clean BASE and is also a concurrency-support index.
+3. Set the benchmark's `@execute_full_benchmark` safety flag to 1.
+4. Capture Results, Messages, and all XML Actual Execution Plans.
+5. Preserve the warm-up, representative-plan, and five-measured-run protocol exactly.
+6. Analyze only the marked measured runs for medians; do not include warm-up, plan-capture, compile, or duplicate outer `sp_executesql` timings.
+7. Require the final `Benchmark complete.` and `Original index existence and enabled/disabled state verified.` markers.
 
-Use query-level `STATISTICS TIME` entries rather than the duplicate outer
-`sp_executesql` entries, calculate medians from all five runs, and report W2
-per-table reads as well as the total. Finally, confirm these restoration
-messages are present:
+## 15. Restoration Verification
+
+The completed output ends with both required success messages:
 
 ```text
 Benchmark complete.
 Original index existence and enabled/disabled state verified.
 ```
+
+The original snapshot recorded C1 as present and enabled, with C2 and C3 absent. Therefore successful restoration means C1 was rebuilt/enabled and C2/C3 were removed after the experiment. No failure-path message appeared.
+
+## 16. Limitations
+
+- Results cover one SQL Server instance, one data distribution, and one deterministic parameter set per workload.
+- Five warm-cache measured runs improve repeatability but do not characterize cold-cache behavior or production concurrency.
+- Representative Actual Plans were captured once per workload/phase, not for each of the five measured executions.
+- The INDEXED phase tested all three candidates together. Actual plans permit access-path attribution, but C3's isolated timing contribution cannot be separated from C1's W2 benefit.
+- SQL Server's displayed timing precision reports several short indexed runs as 0 ms; these mean below displayed resolution.
+- W2 returned one space and MAINTENANCE_RECORD contained only 125 rows, limiting generalization of C3's result to a much larger maintenance history.
+- W1 used one real approved booking, and W3/W4 used one semester. Other parameter selectivities may lead to different plan choices.
+- The benchmark measured reads and query timing, not write throughput, index build duration, fragmentation, or exact index storage size.
+- Exclusive locks protected benchmark fairness, so the run does not measure C1's concurrency behavior directly; that role comes from the separate Step 12 design.
