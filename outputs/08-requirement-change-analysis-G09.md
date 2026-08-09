@@ -73,12 +73,12 @@ The extraction of usage policies and the addition of acknowledgements require ne
 ### 3.2. New Business Rules (Additions for Phase 2)
 *   **Rule 15 (Advisory Notification):** When a space with an active `advisory` maintenance is booked, the system must notify the requester of all active advisories on that space at booking time. The system must record an acknowledgement that the requester was informed and store it with the booking. 
 *   **Rule 16 (Acknowledge informed):** `acknowledge_at` is null when the user has not been submitted it yet. However, when a user is informed of an acknowledge, its `acknowledged_at` must be not null. 
-*   **Rule 16 (Concurrent Maintenance):** A space may have several active maintenance records at the same time, with different impact levels.
-*   **Rule 17 (Impact Escalation):** The impact level of a maintenance record may be escalated (e.g., from `advisory` to `out-of-service`) or downgraded while the maintenance is still open.
-*   **Rule 18 (Escalation Resolution):** If an `advisory` maintenance is escalated to `out-of-service`, the system must identify all already-approved bookings that overlap the maintenance period so that staff can contact the affected requesters.
-*   **Rule 19 (Concurrency Safety):** The system must ensure that two approved bookings cannot use the same space during overlapping time periods, regardless of whether the bookings are created through instant booking or staff approval. This rule must remain valid even when multiple users or staff members perform operations simultaneously.
-*   **Rule 20 (Semester Dates):** A semester's `start_date` must not be later than its `end_date`.
-*   **Rule 21 (Allowed Departments):** If a usage policy has department restrictions, the requester's department must be associated with that policy through `DEPARTMENT_USAGE_POLICY`. A policy with no department associations is unrestricted by department.
+*   **Rule 17 (Concurrent Maintenance):** A space may have several active maintenance records at the same time, with different impact levels.
+*   **Rule 18 (Impact Escalation):** The impact level of a maintenance record may be escalated (e.g., from `advisory` to `out-of-service`) or downgraded while the maintenance is still open.
+*   **Rule 19 (Escalation Resolution):** If an `advisory` maintenance is escalated to `out-of-service`, the system must identify all already-approved bookings that overlap the maintenance period so that staff can contact the affected requesters.
+*   **Rule 20 (Concurrency Safety):** The system must ensure that two approved bookings cannot use the same space during overlapping time periods, regardless of whether the bookings are created through instant booking or staff approval. This rule must remain valid even when multiple users or staff members perform operations simultaneously.
+*   **Rule 21 (Semester Dates):** A semester's `start_date` must not be later than its `end_date`.
+*   **Rule 22 (Allowed Departments):** If a usage policy has department restrictions, the requester's department must be associated with that policy through `DEPARTMENT_USAGE_POLICY`. A policy with no department associations is unrestricted by department.
 
 ## 4. Concurrency Conflicts Analysis
 The introduction of auto-approval and dynamic maintenance statuses creates several potential race conditions that the system must safely handle:

@@ -359,9 +359,13 @@ Ref: ACKNOWLEDGEMENT.maintenance_record_id > MAINTENANCE_RECORD.maintenance_id [
 **USER Domain Checks:**
 * *(Note: Constraint Role was removed because now role is an entity.)*
 
+**USAGE_POLICY Domain Checks (New for Phase 2):**
+* **`chk_usage_policy_max_duration_boundary`**: `CHECK ([max_duration_minutes] > 0)`
+
 **SEMESTER Domain Checks:**
 * **`chk_semester_date_range`**: `CHECK ([start_date] <= [end_date])`
 
 **BOOKING Domain Checks:**
+* **`chk_maintenance_impact_level_domain`**: `CHECK ([impact_level] IN ('out-of-service', 'advisory'))`
 * **`chk_booking_decision_fields`**: `CHECK (([booking_status] <> 'rejected' OR ([decision_staff_id] IS NOT NULL AND [decision_time] IS NOT NULL AND [decision_note] IS NOT NULL)) AND ([booking_status] <> 'approved' OR [decision_time] IS NOT NULL))`
   *(Note: A rejected booking requires the deciding staff member, decision time, and decision note. Every approved booking requires a decision time. For an auto-approved booking, `decision_staff_id` may be NULL because the system made the decision.)*
