@@ -1,4 +1,4 @@
-# Conceptual Database Design (ERD)
+
 ## 1. Conceptual Entity-Relationship Diagram
 ### Diagram 
 Copy the code below and paste it into a live editor like Mermaid Live to view the diagram. The diagram has been updated to include the new entities and relationships required for Phase 2.
@@ -371,3 +371,26 @@ Ref: ACKNOWLEDGEMENT.maintenance_record_id > MAINTENANCE_RECORD.maintenance_id [
 **BOOKING Domain Checks:**
 * **`chk_booking_decision_fields`**: `CHECK (([booking_status] <> 'rejected' OR ([decision_staff_id] IS NOT NULL AND [decision_time] IS NOT NULL AND [decision_note] IS NOT NULL)) AND ([booking_status] <> 'approved' OR [decision_time] IS NOT NULL))`
   *(Note: A rejected booking requires the deciding staff member, decision time, and decision note. Every approved booking requires a decision time. For an auto-approved booking, `decision_staff_id` may be NULL because the system made the decision.)*
+
+## 3. Normalization Validation
+
+`X -> Y` means that `X` functionally determines `Y`. The following table lists the non-trivial functional dependencies implied by the declared primary and unique keys.
+
+| Relation | Candidate key(s) | Functional dependency summary | Normal form |
+|---|---|---|---|
+| `ROLE` | `role_id`; `role_name` | Each candidate key determines every other attribute. | BCNF |
+| `DEPARTMENT` | `department_id`; `department_name` | Each candidate key determines every other attribute. | BCNF |
+| `USER` | `user_id`; `email`; `phone_number` | Each candidate key determines `full_name`, the other candidate-key attributes, `role_id`, `department_id`, and `account_status`. | BCNF |
+| `SEMESTER` | `semester_id`; `semester_name` | Each candidate key determines the other key, `start_date`, and `end_date`. | BCNF |
+| `USAGE_POLICY` | `policy_id`; `policy_name` | Each candidate key determines the other key, `max_duration_minutes`, `requires_business_hours`, and `legacy_policy_text`. | BCNF |
+| `ROLE_USAGE_POLICY` | (`role_id`, `policy_id`) | The complete composite key determines the row; there are no non-key attributes. | BCNF |
+| `DEPARTMENT_USAGE_POLICY` | (`department_id`, `policy_id`) | The complete composite key determines the row; there are no non-key attributes. | BCNF |
+| `SPACE` | `space_code`; (`building`, `floor`, `room_number`) | Each candidate key determines `space_name`, `space_type`, location, `capacity`, `current_status`, and `policy_id`. | BCNF |
+| `FACILITY` | `facility_id` | `facility_id -> facility_name, space_code`. | BCNF |
+| `BOOKING` | `booking_id` | `booking_id` determines all requester, space, schedule, approval, check-in, completion, and usage attributes. | BCNF |
+| `MAINTENANCE_RECORD` | `maintenance_id` | `maintenance_id` determines all space, staff, time, status, result, and impact attributes. | BCNF |
+| `ACKNOWLEDGEMENT` | (`booking_id`, `maintenance_record_id`) | (`booking_id`, `maintenance_record_id`) `-> acknowledged_at`; neither key component alone determines the timestamp. | BCNF |
+
+All relations satisfy Third Normal Form (3NF); in fact, every listed determinant is a candidate key, so the relations also satisfy Boyce-Codd Normal Form (BCNF). The M:N role-policy and department-policy relationships and the booking-maintenance acknowledgement relationship are represented by separate composite-key relations, preventing repeating groups and partial dependencies. Descriptive role, department, and policy data are also stored separately from their referencing relations, preventing transitive dependencies.
+
+Rules such as `start_date <= end_date`, the allowed `impact_level` values, and the required decision fields for approved or rejected bookings are domain or conditional business constraints rather than additional functional dependencies.
