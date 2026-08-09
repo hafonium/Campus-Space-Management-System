@@ -217,7 +217,7 @@ Table SEMESTER {
 
 Table USAGE_POLICY {
   policy_id integer [pk, increment]
-  policy_name varchar(255) [not null]
+  policy_name varchar(255) [not null, unique]
   max_duration_minutes integer
   requires_business_hours boolean
   legacy_policy_text text
@@ -295,7 +295,7 @@ Table MAINTENANCE_RECORD {
   completion_time datetime
   status varchar(50) [not null, default: 'reported']
   result_note text
-  impact_level varchar(50)
+  impact_level varchar(50) [not null, default: 'out-of-service']
 }
 
 Table ACKNOWLEDGEMENT {
@@ -365,7 +365,9 @@ Ref: ACKNOWLEDGEMENT.maintenance_record_id > MAINTENANCE_RECORD.maintenance_id [
 **SEMESTER Domain Checks:**
 * **`chk_semester_date_range`**: `CHECK ([start_date] <= [end_date])`
 
-**BOOKING Domain Checks:**
+**MAINTENANCE_RECORD Domain Checks:**
 * **`chk_maintenance_impact_level_domain`**: `CHECK ([impact_level] IN ('out-of-service', 'advisory'))`
+
+**BOOKING Domain Checks:**
 * **`chk_booking_decision_fields`**: `CHECK (([booking_status] <> 'rejected' OR ([decision_staff_id] IS NOT NULL AND [decision_time] IS NOT NULL AND [decision_note] IS NOT NULL)) AND ([booking_status] <> 'approved' OR [decision_time] IS NOT NULL))`
   *(Note: A rejected booking requires the deciding staff member, decision time, and decision note. Every approved booking requires a decision time. For an auto-approved booking, `decision_staff_id` may be NULL because the system made the decision.)*
