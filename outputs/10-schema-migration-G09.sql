@@ -476,7 +476,7 @@ BEGIN
         WHERE i.booking_status = 'approved'
           AND EXISTS (
               SELECT 1
-              FROM dbo.BOOKING b WITH (UPDLOCK, HOLDLOCK)
+              FROM dbo.BOOKING b 
               WHERE b.space_code = i.space_code
                 AND b.booking_status = 'approved'
                 AND b.booking_id <> ISNULL(i.booking_id, -1)
