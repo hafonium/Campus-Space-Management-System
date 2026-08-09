@@ -442,7 +442,7 @@ BEGIN
         ;THROW 50000, 'Cannot book space: Space is closed, retired, or has active out-of-service maintenance during the requested period.', 1;
     END
 
-    -- Updated Rule 19 / Phase 1 Rule 7: Overlapping approved booking prevention
+    -- Updated Rule 20 / Phase 1 Rule 7: Overlapping approved booking prevention
     IF EXISTS (
         SELECT 1
         FROM @effective i
@@ -653,7 +653,7 @@ BEGIN
 END;
 GO
 
--- Rule 18: staff can query approved bookings affected by an active
+-- Rule 19: staff can query approved bookings affected by an active
 -- out-of-service maintenance record after escalation.
 CREATE OR ALTER VIEW dbo.vw_approved_bookings_affected_by_outage
 AS
