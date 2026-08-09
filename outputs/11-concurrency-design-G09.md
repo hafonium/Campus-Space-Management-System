@@ -80,10 +80,13 @@ COMMIT → locks released                     UNBLOCKED → re-scans
 
 ### 2.2. Why a Stored Procedure (Not Trigger-Only)
 
-The `INSTEAD OF INSERT, UPDATE` trigger already carries `WITH (UPDLOCK, HOLDLOCK)` hints (see `10-schema-migration-G09.sql`). However, the trigger inherits the caller's transaction isolation level. If the caller operates under `READ COMMITTED`, other statements inside the trigger may not be fully protected. A dedicated stored procedure:
+The `INSTEAD OF INSERT, UPDATE` trigger (`trg_booking_enforce_rules`) checks for overlapping approved bookings, but does so **without lock hints** — it operates under whatever isolation level the calling session provides (default `READ COMMITTED`). Two concurrent raw UPDATE statements can both pass the trigger's overlap check and both commit, producing a double booking.
 
-- Explicitly sets `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` — unambiguous.
-- Encapsulates the full approval flow (existence check → overlap check → update) in one atomic unit.
+A dedicated stored procedure closes this gap:
+
+- Explicitly sets `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` — forces the entire transaction to behave as if it were the only one running.
+- Uses `WITH (UPDLOCK, SERIALIZABLE)` hints on the overlap-check queries — a concurrent approver on the same space is blocked until the first commits or rolls back.
+- Encapsulates the full approval flow (existence check → overlap check → update) in one atomic unit — no caller can accidentally bypass the protection with a raw UPDATE.
 - Provides a single, testable entry point for concurrency verification.
 
 ### 2.3. Alternatives Not Chosen
@@ -93,7 +96,7 @@ The `INSTEAD OF INSERT, UPDATE` trigger already carries `WITH (UPDLOCK, HOLDLOCK
 | **Application-level distributed lock** | External infrastructure dependency; direct SQL can bypass. |
 | **`sp_getapplock`** | Coarse-grained; one lock per space blocks all non-overlapping operations too. |
 | **Optimistic concurrency (application retry)** | Requires retry logic in every client; cascading retries under contention. |
-| **Trigger-only `UPDLOCK, SERIALIZABLE` hints** | Works but isolation is caller-dependent; less explicit than a stored procedure. |
+| **Trigger-based locking (`UPDLOCK, SERIALIZABLE` in trigger)** | Would require lock hints inside the `INSTEAD OF` trigger. Isolation is inherited from the caller, and procedural code mixed with locking makes the trigger harder to test independently. A stored procedure has clearer semantics. |
 
 ---
 

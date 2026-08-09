@@ -33,9 +33,10 @@ GO
 -- ============================================================================
 
 CREATE OR ALTER PROCEDURE dbo.sp_approve_booking
-    @booking_id         INT,
-    @decision_staff_id  INT,
-    @decision_note      VARCHAR(MAX)
+    @booking_id            INT,
+    @decision_staff_id     INT,
+    @decision_note         VARCHAR(MAX),
+    @hold_lock_seconds     INT = 0
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -84,6 +85,16 @@ BEGIN
             decision_time     = SYSDATETIME(),
             decision_note     = @decision_note
         WHERE booking_id = @booking_id;
+
+        IF @hold_lock_seconds > 0
+        BEGIN
+            DECLARE @delay_str VARCHAR(8) = '00:00:'
+                + RIGHT('0' + CAST(@hold_lock_seconds AS VARCHAR(2)), 2);
+            PRINT '--- LOCK HELD ---';
+            PRINT 'Run Session B NOW within '
+                + CAST(@hold_lock_seconds AS VARCHAR(5)) + ' seconds.';
+            WAITFOR DELAY @delay_str;
+        END
 
         COMMIT TRANSACTION;
 
