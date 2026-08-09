@@ -88,8 +88,22 @@ CREATE TABLE dbo.USAGE_POLICY (
     requires_business_hours BIT NULL,
     legacy_policy_text VARCHAR(MAX) NULL,
     CONSTRAINT pk_usage_policy PRIMARY KEY (policy_id),
+    CONSTRAINT uq_usage_policy_policy_name UNIQUE (policy_name),
     CONSTRAINT chk_usage_policy_max_duration_boundary CHECK ([max_duration_minutes] > 0)
 );
+GO
+
+-- Upgrade databases created by an earlier Phase 2 script where policy_name
+-- was not yet enforced as a candidate key.
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.key_constraints
+    WHERE [type] = 'UQ'
+      AND [name] = 'uq_usage_policy_policy_name'
+      AND parent_object_id = OBJECT_ID('dbo.USAGE_POLICY')
+)
+    ALTER TABLE dbo.USAGE_POLICY
+        ADD CONSTRAINT uq_usage_policy_policy_name UNIQUE (policy_name);
 GO
 
 -- ----------------------------------------------------------------------------
@@ -176,6 +190,19 @@ SET impact_level = 'out-of-service'
 WHERE impact_level IS NULL;
 GO
 ALTER TABLE dbo.MAINTENANCE_RECORD ALTER COLUMN impact_level VARCHAR(50) NOT NULL;
+GO
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.default_constraints dc
+    JOIN sys.columns c
+      ON c.object_id = dc.parent_object_id
+     AND c.column_id = dc.parent_column_id
+    WHERE dc.parent_object_id = OBJECT_ID('dbo.MAINTENANCE_RECORD')
+      AND c.name = 'impact_level'
+)
+    ALTER TABLE dbo.MAINTENANCE_RECORD
+        ADD CONSTRAINT df_maintenance_impact_level
+        DEFAULT ('out-of-service') FOR impact_level;
 GO
 IF OBJECT_ID('dbo.chk_maintenance_impact_level_domain', 'C') IS NULL
 ALTER TABLE dbo.MAINTENANCE_RECORD 

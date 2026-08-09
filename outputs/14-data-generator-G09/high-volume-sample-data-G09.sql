@@ -7,6 +7,8 @@
 --
 -- Generates a deterministic high-volume dataset:
 --   - 100,000 bookings by default (range 100,000 .. 500,000)
+--   - 5,000 users, at least 120 spaces, and 12 facilities
+--   - four maintenance records per generated space
 --   - at least three complete academic years
 --   - two realistic SEMESTER rows per academic year (SEMESTER remains
 --     intentionally independent of BOOKING)
@@ -18,15 +20,13 @@
 -- indices are derived arithmetically from digit-based number tables (no
 -- ROW_NUMBER over unordered rows), and user/staff ids are resolved through
 -- explicit id maps instead of relying on IDENTITY allocation order.
---   All user-facing values are realistic (Vietnamese, no diacritics):
---   names, departments, phones (09x/03x/07x/08x), emails @hcmus.edu.vn,
---   buildings (Khu A..D), space codes, facilities, policies and notes.
+--   All user-facing values follow the English Waterloo-style sample dataset:
+--   English names and departments, +1-519 phone numbers, @uwaterloo.ca
+--   addresses, familiar campus buildings, facilities, policies, and notes.
 --   Nothing carries marker text; generated rows are tracked in persistent
 --   dbo.gen_*_marker tables (PK/identity-based) so re-runs can clean up.
---   Users: PRIMARY email = <surname-initial><middle-initial><given> + user_id
---   e.g. "Le Gia Phuc" -> lgphuc<user_id>@hcmus.edu.vn; if that address would
---   already be taken, falls back to <admission-year><dept-code><seq> mailbox
---   e.g. "24 01 0042".
+--   User emails use firstname.lastname####@uwaterloo.ca, where the numeric
+--   suffix makes every deterministic high-volume address unique.
 -- Rerunnable: cleanup deletes only previously generated rows; the
 --   hand-written demonstration rows from 06-sample-data-G09.sql are kept.
 --
@@ -212,14 +212,14 @@ DECLARE @SaturdayCount INT = (SELECT COUNT(*) FROM #saturdays);
 -- Space count: enough slots so every space spans the full calendar.
 -- 6 slots per weekday (08:00-10:00 ... 18:00-20:00), non-overlapping.
 DECLARE @SpaceCount INT = CASE
-    WHEN @BookingCount / (@WeekdayCount * 6.0) <= 30 THEN 30
+    WHEN @BookingCount / (@WeekdayCount * 6.0) <= 120 THEN 120
     ELSE CEILING(@BookingCount / (@WeekdayCount * 6.0))
 END;
-DECLARE @UserCount INT = 2000;
+DECLARE @UserCount INT = 5000;
 DECLARE @PolicyCount INT = 12;
+DECLARE @FacilityCount INT = 12;
 DECLARE @StaffCount INT = 60;       -- facility_staff band: user_idx 0..59
 DECLARE @ManagerCount INT = 40;     -- facility_manager band: user_idx 60..99
-DECLARE @FirstGenUserId INT = (SELECT ISNULL(MAX(user_id), 0) + 1 FROM dbo.[USER]);
 
 PRINT '  Calendar: ' + CONVERT(VARCHAR(10), @CalStart) + ' .. '
     + CONVERT(VARCHAR(10), @CalEnd) + '  weekdays=' + CAST(@WeekdayCount AS VARCHAR(10))
@@ -240,13 +240,13 @@ WITH AY(n) AS (
     SELECT n + 1 FROM AY WHERE n + 1 < @AcademicYearCount
 )
 INSERT INTO #gen_semester (semester_name, start_date, end_date)
-SELECT 'Hoc ky 1 ' + CAST(@FirstAcademicYear + n AS VARCHAR(4)) + '-'
+SELECT 'Fall ' + CAST(@FirstAcademicYear + n AS VARCHAR(4)) + '-'
        + CAST(@FirstAcademicYear + n + 1 AS VARCHAR(4)),
        DATEFROMPARTS(@FirstAcademicYear + n, 9, 1),
        DATEFROMPARTS(@FirstAcademicYear + n + 1, 1, 15)
 FROM AY
 UNION ALL
-SELECT 'Hoc ky 2 ' + CAST(@FirstAcademicYear + n AS VARCHAR(4)) + '-'
+SELECT 'Winter ' + CAST(@FirstAcademicYear + n + 1 AS VARCHAR(4)) + '-'
        + CAST(@FirstAcademicYear + n + 1 AS VARCHAR(4)),
        DATEFROMPARTS(@FirstAcademicYear + n + 1, 2, 15),
        DATEFROMPARTS(@FirstAcademicYear + n + 1, 6, 30)
@@ -306,18 +306,18 @@ WITH NUMS(n) AS (
 INSERT INTO dbo.stg_gen_policy
 SELECT n,
        CASE n % 12
-           WHEN 0 THEN 'Chinh sach dat phong co ban'
-           WHEN 1 THEN 'Chinh sach su dung trong gio hanh chinh'
-           WHEN 2 THEN 'Chinh sach su dung ngoai gio hanh chinh'
-           WHEN 3 THEN 'Chinh sach su dung cuoi tuan'
-           WHEN 4 THEN 'Chinh sach giang duong'
-           WHEN 5 THEN 'Chinh sach phong may tinh'
-           WHEN 6 THEN 'Chinh sach phong thi nghiem'
-           WHEN 7 THEN 'Chinh sach phong hop'
-           WHEN 8 THEN 'Chinh sach hoi thao va su kien'
-           WHEN 9 THEN 'Chinh sach sinh hoat doan hoi'
-           WHEN 10 THEN 'Chinh sach on thi va hoc nhom'
-           ELSE 'Chinh sach kiem tra va thi cu' END,
+           WHEN 0 THEN 'Standard Room Booking Policy'
+           WHEN 1 THEN 'Business Hours Access Policy'
+           WHEN 2 THEN 'After-Hours Access Policy'
+           WHEN 3 THEN 'Weekend Space Use Policy'
+           WHEN 4 THEN 'Lecture Hall Use Policy'
+           WHEN 5 THEN 'Computer Lab Use Policy'
+           WHEN 6 THEN 'Project Lab Safety Policy'
+           WHEN 7 THEN 'Meeting Room Use Policy'
+           WHEN 8 THEN 'Seminar and Event Policy'
+           WHEN 9 THEN 'Student Activity Policy'
+           WHEN 10 THEN 'Group Study Policy'
+           ELSE 'Examination Room Policy' END,
        120 + ((n * 47) % 180),
        CASE WHEN n % 2 = 0 THEN 1 ELSE 0 END,
        NULL
@@ -404,21 +404,24 @@ WITH NUMS(n) AS (
 )
 INSERT INTO dbo.stg_gen_space
 SELECT n,
-       -- realistic room code, e.g. 'A101' (Khu A, floor 1, room 01)
-       CHAR(65 + (n % 4))
+       -- Waterloo-style room code, e.g. 'MC-101'
+       CASE n % 6 WHEN 0 THEN 'MC-' WHEN 1 THEN 'DC-' WHEN 2 THEN 'M3-'
+            WHEN 3 THEN 'STC-' WHEN 4 THEN 'E5-' ELSE 'EV3-' END
          + CAST((n / 4) % 3 + 1 AS VARCHAR(2))
          + RIGHT('00' + CAST((n / 12) + 1 AS VARCHAR(3)), 2) AS space_code,
-       -- realistic Vietnamese name, e.g. 'Phong hoc A101'
+       -- Descriptive English room name, consistent with the reference sample.
        CASE n % 6
-           WHEN 0 THEN 'Giang duong' WHEN 1 THEN 'Phong hoc' WHEN 2 THEN 'Phong may tinh'
-           WHEN 3 THEN 'Phong thi nghiem' WHEN 4 THEN 'Phong hop' ELSE 'Khu hoc tap' END
-         + ' ' + CHAR(65 + (n % 4))
+           WHEN 0 THEN 'Lecture Hall' WHEN 1 THEN 'Classroom' WHEN 2 THEN 'Computing Lab'
+           WHEN 3 THEN 'Project Lab' WHEN 4 THEN 'Meeting Room' ELSE 'Collaborative Workspace' END
+         + ' ' + CASE n % 6 WHEN 0 THEN 'MC-' WHEN 1 THEN 'DC-' WHEN 2 THEN 'M3-'
+              WHEN 3 THEN 'STC-' WHEN 4 THEN 'E5-' ELSE 'EV3-' END
          + CAST((n / 4) % 3 + 1 AS VARCHAR(2))
          + RIGHT('00' + CAST((n / 12) + 1 AS VARCHAR(3)), 2) AS space_name,
        CASE n % 6
            WHEN 0 THEN 'auditorium' WHEN 1 THEN 'classroom' WHEN 2 THEN 'computer_lab'
            WHEN 3 THEN 'project_lab' WHEN 4 THEN 'meeting_room' ELSE 'student_workspace' END,
-       'Khu ' + CHAR(65 + (n % 4)) AS building,
+       CASE n % 6 WHEN 0 THEN 'MC' WHEN 1 THEN 'DC' WHEN 2 THEN 'M3'
+            WHEN 3 THEN 'STC' WHEN 4 THEN 'E5' ELSE 'EV3' END AS building,
        (n / 4) % 3 + 1 AS floor,
        CAST((n / 12) + 1 AS VARCHAR(10)) AS room_number,
        20 + ((n * 37) % 180),
@@ -444,18 +447,23 @@ SELECT space_code FROM dbo.stg_gen_space;
 -- ----------------------------------------------------------------------------
 PRINT 'Step 3.4: facilities and space-facility links';
 
--- Realistic Vietnamese facility names (distinct from the English demo rows
--- in 06-sample-data-G09.sql).
+-- English facility names aligned with 06-sample-data-G09.sql.
 INSERT INTO dbo.FACILITY (facility_name)
 SELECT v.facility_name
-FROM (VALUES ('May chieu'),('Bang trang'),('Loa am thanh'),('Dieu hoa')) v(facility_name)
+FROM (VALUES ('Document Camera'),('Ceiling Projector'),('Wireless Microphone'),
+             ('Climate Control'),('Interactive Whiteboard'),('Hybrid Meeting Camera'),
+             ('Desktop Workstation'),('Lecture Capture System'),('Assistive Listening System'),
+             ('Charging Station'),('Adjustable Lectern'),('Digital Display')) v(facility_name)
 WHERE NOT EXISTS (SELECT 1 FROM dbo.FACILITY f
                   WHERE f.facility_name = v.facility_name);
 
 -- Track the generated facilities for the next cleanup run.
 INSERT INTO dbo.gen_facility_marker (facility_id)
 SELECT f.facility_id FROM dbo.FACILITY f
-WHERE f.facility_name IN ('May chieu','Bang trang','Loa am thanh','Dieu hoa');
+WHERE f.facility_name IN ('Document Camera','Ceiling Projector','Wireless Microphone',
+                          'Climate Control','Interactive Whiteboard','Hybrid Meeting Camera',
+                          'Desktop Workstation','Lecture Capture System','Assistive Listening System',
+                          'Charging Station','Adjustable Lectern','Digital Display');
 
 IF OBJECT_ID('tempdb..#gen_facility') IS NOT NULL DROP TABLE #gen_facility;
 SELECT f.facility_id,
@@ -490,49 +498,45 @@ CREATE TABLE dbo.stg_gen_user (
 );
 
 -- ----------------------------------------------------------------------------
--- Vietnamese name/reference lists (ASCII transliteration so they survive the
--- Latin-1 collation). Structure follows Wikipedia: Vietnamese names,
--- surname + middle + given. Vietnamese initials+given produce the e-mail
--- local part, e.g. "Le Gia Phuc" -> l + g + phuc = "lgphuc".
+-- English name/reference lists. Combining 20 first names, 10 middle initials,
+-- and 24 surnames provides enough natural-looking variation for 2,000 users.
 -- ----------------------------------------------------------------------------
 IF OBJECT_ID('tempdb..#vn_surname') IS NOT NULL DROP TABLE #vn_surname;
 CREATE TABLE #vn_surname (vn_id INT NOT NULL PRIMARY KEY, vn_name VARCHAR(60) NOT NULL);
 INSERT INTO #vn_surname (vn_id, vn_name) VALUES
- (1,'Nguyen'),(2,'Tran'),(3,'Le'),(4,'Pham'),(5,'Hoang'),(6,'Huynh'),
- (7,'Phan'),(8,'Vu'),(9,'Vo'),(10,'Dang'),(11,'Bui'),(12,'Do'),
- (13,'Ho'),(14,'Ngo'),(15,'Duong'),(16,'Ly'),(17,'Dinh'),(18,'Truong'),
- (19,'To'),(20,'Lam'),(21,'Trinh'),(22,'Phung'),(23,'Doan'),(24,'Bao');
+ (1,'Anderson'),(2,'Brown'),(3,'Campbell'),(4,'Chen'),(5,'Davis'),(6,'Evans'),
+ (7,'Garcia'),(8,'Hassan'),(9,'Johnson'),(10,'Kim'),(11,'Lee'),(12,'Martin'),
+ (13,'Martinez'),(14,'Miller'),(15,'Nguyen'),(16,'O''Brien'),(17,'Okafor'),(18,'Patel'),
+ (19,'Robinson'),(20,'Santos'),(21,'Smith'),(22,'Taylor'),(23,'Wilson'),(24,'Wong');
 
 IF OBJECT_ID('tempdb..#vn_middle') IS NOT NULL DROP TABLE #vn_middle;
 CREATE TABLE #vn_middle (vn_id INT NOT NULL PRIMARY KEY, vn_name VARCHAR(60) NOT NULL);
 INSERT INTO #vn_middle (vn_id, vn_name) VALUES
-(1,'Van'),(2,'Thi'),(3,'Minh'),(4,'Gia'),(5,'Huu'),(6,'Cong'),
-(7,'Hong'),(8,'Thanh'),(9,'Ngoc'),(10,'Quoc');
+(1,'A.'),(2,'B.'),(3,'C.'),(4,'D.'),(5,'E.'),(6,'J.'),
+(7,'L.'),(8,'M.'),(9,'R.'),(10,'S.');
 
 IF OBJECT_ID('tempdb..#vn_given') IS NOT NULL DROP TABLE #vn_given;
 CREATE TABLE #vn_given (vn_id INT NOT NULL PRIMARY KEY, vn_name VARCHAR(60) NOT NULL);
 INSERT INTO #vn_given (vn_id, vn_name) VALUES
-(1,'Anh'),(2,'An'),(3,'Bao'),(4,'Binh'),(5,'Cuong'),(6,'Duc'),(7,'Duy'),
-(8,'Hanh'),(9,'Hieu'),(10,'Hoa'),(11,'Hung'),(12,'Huy'),(13,'Huong'),
-(14,'Kien'),(15,'Khoa'),(16,'Linh'),(17,'Long'),(18,'Mai'),(19,'Minh'),
-(20,'Ngan'),(21,'Ngoc'),(22,'Phuc'),(23,'Phuong'),(24,'Quan'),(25,'Son'),
-(26,'Tai'),(27,'Tam'),(28,'Thang'),(29,'Thao'),(30,'Thu'),(31,'Trang'),
-(32,'Trung'),(33,'Tuan'),(34,'Tu'),(35,'Vy'),(36,'Yen');
+(1,'Alice'),(2,'Amelia'),(3,'Benjamin'),(4,'Chloe'),(5,'Daniel'),
+(6,'Emily'),(7,'Ethan'),(8,'Fatima'),(9,'Grace'),(10,'Hannah'),
+(11,'Isabella'),(12,'James'),(13,'Liam'),(14,'Lucas'),(15,'Maria'),
+(16,'Michael'),(17,'Noah'),(18,'Olivia'),(19,'Sarah'),(20,'Thomas');
 
--- HCMC University of Science - the ten (10) teaching/department bodies
+-- University of Waterloo academic and service departments.
 IF OBJECT_ID('tempdb..#vn_dept') IS NOT NULL DROP TABLE #vn_dept;
 CREATE TABLE #vn_dept (vn_id INT NOT NULL PRIMARY KEY, vn_name VARCHAR(120) NOT NULL);
 INSERT INTO #vn_dept (vn_id, vn_name) VALUES
-(1,'Khoa Toan - Tin hoc'),
-(2,'Khoa Cong nghe Thong tin'),
-(3,'Khoa Vat ly - Vat ly ky thuat'),
-(4,'Khoa Hoa hoc'),
-(5,'Khoa Sinh hoc - Cong nghe Sinh hoc'),
-(6,'Khoa Moi truong'),
-(7,'Khoa Dia chat'),
-(8,'Khoa Khoa hoc va Cong nghe Vat lieu'),
-(9,'Khoa Dien tu - Vien thong'),
-(10,'Khoa Khoa hoc Lieu ngan');
+(1,'Computer Science'),
+(2,'Mathematics'),
+(3,'Electrical and Computer Engineering'),
+(4,'Mechanical and Mechatronics Engineering'),
+(5,'Civil and Environmental Engineering'),
+(6,'Physics and Astronomy'),
+(7,'Chemistry'),
+(8,'Biology'),
+(9,'Psychology'),
+(10,'Facilities Management');
 
 -- Ensure normalized department reference rows exist. Existing migrated
 -- departments are reused by name; only missing departments are inserted.
@@ -578,16 +582,12 @@ INSERT INTO dbo.stg_gen_user (user_idx, full_name, email, email_local,
                               phone_number, role_id, department_id, account_status)
 SELECT
     n,
-    s.vn_name + ' ' + m.vn_name + ' ' + g.vn_name AS full_name,
-    'gen-' + CAST(n + 1 AS VARCHAR(10)) + '@campus.example' AS email,
-    LOWER(LEFT(s.vn_name, 1) + LEFT(m.vn_name, 1) + g.vn_name) AS email_local,
-    -- realistic Vietnamese mobile number: 09x/03x/07x/08x + 8 digits
-    CASE n % 4
-        WHEN 0 THEN '09'
-        WHEN 1 THEN '03'
-        WHEN 2 THEN '07'
-        ELSE '08' END
-        + RIGHT('00000000' + CAST(((n * 17 + 3) % 10000000 + 1000000) AS VARCHAR(20)), 8),
+    g.vn_name + ' ' + m.vn_name + ' ' + s.vn_name AS full_name,
+    LOWER(g.vn_name + '.' + REPLACE(s.vn_name, '''', ''))
+        + RIGHT('0000' + CAST(n + 1 AS VARCHAR(10)), 4) + '@uwaterloo.ca' AS email,
+    LOWER(g.vn_name + '.' + REPLACE(s.vn_name, '''', '')) AS email_local,
+    -- 1000..2999 is disjoint from the hand-written 0101..0112 range.
+    '+1-519-555-' + RIGHT('0000' + CAST(n + 1000 AS VARCHAR(10)), 4),
     CASE WHEN n < 60 THEN @RoleStaff
          WHEN n < 100 THEN @RoleManager
          WHEN n < 210 THEN @RoleAdmin
@@ -599,13 +599,46 @@ SELECT
 FROM NUMS
 JOIN #vn_surname s ON s.vn_id = (n % 24) + 1
 JOIN #vn_middle m ON m.vn_id = ((n / 4) % 10) + 1
-JOIN #vn_given g ON g.vn_id = ((n / 40) % 36) + 1
+JOIN #vn_given g ON g.vn_id = ((n / 40) % 20) + 1
 JOIN #vn_dept d ON d.vn_id = (n % 10) + 1
 JOIN dbo.DEPARTMENT dep ON dep.department_name = d.vn_name
 WHERE n < @UserCount;
 
+-- USER.email and USER.phone_number are both protected by UNIQUE constraints.
+-- Validate the complete staged set, including collisions with retained sample
+-- rows, before attempting either insert statement.
+IF EXISTS (
+    SELECT email
+    FROM dbo.stg_gen_user
+    GROUP BY email
+    HAVING COUNT(*) > 1
+)
+    THROW 53004, 'Generated user emails are not unique within the staged set.', 1;
+
+IF EXISTS (
+    SELECT phone_number
+    FROM dbo.stg_gen_user
+    GROUP BY phone_number
+    HAVING COUNT(*) > 1
+)
+    THROW 53005, 'Generated user phone numbers are not unique within the staged set.', 1;
+
+IF EXISTS (
+    SELECT 1
+    FROM dbo.stg_gen_user s
+    JOIN dbo.[USER] u ON u.email = s.email
+)
+    THROW 53006, 'A generated user email conflicts with an existing user.', 1;
+
+IF EXISTS (
+    SELECT 1
+    FROM dbo.stg_gen_user s
+    JOIN dbo.[USER] u ON u.phone_number = s.phone_number
+)
+    THROW 53007, 'A generated user phone number conflicts with an existing user.', 1;
+
 -- facility_staff (0..59) and facility_manager (60..99) inserted first so the
--- staff user ids form a contiguous band starting at @FirstGenUserId.
+-- staff user ids form a contiguous band for deterministic staff mapping.
 INSERT INTO dbo.[USER] (full_name, email, phone_number, role_id, department_id, account_status)
 SELECT full_name, email, phone_number, role_id, department_id, account_status
 FROM dbo.stg_gen_user
@@ -618,37 +651,45 @@ FROM dbo.stg_gen_user
 WHERE user_idx >= 100
 ORDER BY user_idx;
 
--- Track generated users for the next cleanup run (emails are still the marker
--- here; Step 10 will replace them with real @hcmus.edu.vn addresses).
+-- Track generated users by joining their unique, realistic email addresses.
 INSERT INTO dbo.gen_user_marker (user_id)
-SELECT user_id FROM dbo.[USER] WHERE email LIKE 'gen-%@campus.example';
+SELECT u.user_id FROM dbo.[USER] u
+JOIN dbo.stg_gen_user s ON s.email = u.email;
+
+IF (SELECT COUNT(*) FROM dbo.stg_gen_policy) <> @PolicyCount
+    THROW 53008, 'Generated policy count does not match PolicyCount.', 1;
+IF (SELECT COUNT(*) FROM dbo.stg_gen_space) <> @SpaceCount
+    THROW 53009, 'Generated space count does not match SpaceCount.', 1;
+IF (SELECT COUNT(*) FROM dbo.gen_facility_marker) <> @FacilityCount
+    THROW 53022, 'Generated facility count does not match FacilityCount.', 1;
+IF (SELECT COUNT(*) FROM dbo.gen_user_marker) <> @UserCount
+    THROW 53023, 'Generated user count does not match UserCount.', 1;
 
 -- Deterministic id maps (do not rely on IDENTITY allocation order)
 IF OBJECT_ID('tempdb..#user_map') IS NOT NULL DROP TABLE #user_map;
-SELECT user_id, user_idx
+SELECT u.user_id, s.user_idx
 INTO #user_map
-FROM (
-    SELECT user_id,
-           CAST(REPLACE(REPLACE(email, 'gen-', ''), '@campus.example', '') AS INT) - 1 AS user_idx
-    FROM dbo.[USER]
-    WHERE email LIKE 'gen-%@campus.example'
-) m;
+FROM dbo.[USER] u
+JOIN dbo.stg_gen_user s ON s.email = u.email;
+CREATE UNIQUE CLUSTERED INDEX ix_user_map_user_idx ON #user_map(user_idx);
 
 IF OBJECT_ID('tempdb..#decision_staff') IS NOT NULL DROP TABLE #decision_staff;
 SELECT ROW_NUMBER() OVER (ORDER BY user_id) - 1 AS staff_ord, user_id
 INTO #decision_staff
 FROM dbo.[USER] u
 JOIN dbo.ROLE r ON r.role_id = u.role_id
-WHERE u.email LIKE 'gen-%@campus.example'
+WHERE u.user_id IN (SELECT user_id FROM dbo.gen_user_marker)
   AND r.role_name IN ('facility_staff', 'facility_manager');
+CREATE UNIQUE CLUSTERED INDEX ix_decision_staff_ord ON #decision_staff(staff_ord);
 
 IF OBJECT_ID('tempdb..#checkin_staff') IS NOT NULL DROP TABLE #checkin_staff;
 SELECT ROW_NUMBER() OVER (ORDER BY user_id) - 1 AS staff_ord, user_id
 INTO #checkin_staff
 FROM dbo.[USER] u
 JOIN dbo.ROLE r ON r.role_id = u.role_id
-WHERE u.email LIKE 'gen-%@campus.example'
+WHERE u.user_id IN (SELECT user_id FROM dbo.gen_user_marker)
   AND r.role_name = 'facility_staff';
+CREATE UNIQUE CLUSTERED INDEX ix_checkin_staff_ord ON #checkin_staff(staff_ord);
 
 -- ============================================================================
 -- 4. MAINTENANCE_RECORD (advisory + out-of-service)
@@ -677,7 +718,7 @@ INSERT INTO dbo.stg_gen_maintenance (
 SELECT s.space_code,
        (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 37) % @UserCount),
        (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 13) % 100),
-       'Kiem tra dinh ky he thong dien, den chieu - ' + s.space_code,
+       'Routine inspection of lighting and electrical outlets in ' + s.space_code,
        CAST(DATEADD(HOUR, 8, CAST(w.wd_date AS DATETIME2)) AS DATETIME2),
        NULL,
        'in_progress',
@@ -689,7 +730,7 @@ UNION ALL
 SELECT s.space_code,
        (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 37 + 11) % @UserCount),
        (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 13 + 7) % 100),
-       'Kiem tra dinh ky dieu hoa va thong gio - ' + s.space_code,
+       'Routine inspection of ventilation and climate controls in ' + s.space_code,
        CAST(DATEADD(HOUR, 8, CAST(w.wd_date AS DATETIME2)) AS DATETIME2),
        NULL,
        'reported',
@@ -707,7 +748,7 @@ INSERT INTO dbo.stg_gen_maintenance (
 SELECT s.space_code,
        (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 41 + 3) % @UserCount),
        (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 17) % 100),
-       'Bao tri tong ve sinh phong, kiem thet bi - ' + s.space_code,
+       'Deep cleaning and equipment inspection for ' + s.space_code,
        CAST(DATEADD(HOUR, 8, CAST(w.sa_date AS DATETIME2)) AS DATETIME2),
        CAST(DATEADD(HOUR, 20, CAST(DATEADD(DAY, 1, w.sa_date) AS DATETIME2)) AS DATETIME2),
        'in_progress',
@@ -719,11 +760,11 @@ UNION ALL
 SELECT s.space_code,
        (SELECT user_id FROM #user_map WHERE user_idx = (s.space_idx * 41 + 5) % @UserCount),
        (SELECT user_id FROM #decision_staff WHERE staff_ord = (s.space_idx * 17 + 9) % 100),
-       'Bao tri he thong dien va thiet bi - ' + s.space_code,
+       'Electrical and classroom equipment maintenance for ' + s.space_code,
        CAST(DATEADD(HOUR, 8, CAST(w.sa_date AS DATETIME2)) AS DATETIME2),
        CAST(DATEADD(HOUR, 20, CAST(DATEADD(DAY, 1, w.sa_date) AS DATETIME2)) AS DATETIME2),
        'completed',
-       'Da hoan tat bao tri, phong san sang su dung lai',
+       'Maintenance completed; room inspected and returned to service.',
        'out-of-service'
 FROM dbo.stg_gen_space s
 JOIN #saturdays w ON w.sa_ord = ((s.space_idx + 13) % @SaturdayCount);
@@ -743,6 +784,9 @@ FROM dbo.stg_gen_maintenance;
 INSERT INTO dbo.gen_maintenance_marker (maintenance_id)
 SELECT maintenance_id FROM @gen_maint_ids;
 
+IF (SELECT COUNT(*) FROM dbo.gen_maintenance_marker) <> @SpaceCount * 4
+    THROW 53024, 'Generated maintenance count must equal four records per space.', 1;
+
 -- ============================================================================
 -- 5. BOOKING STAGING
 -- ============================================================================
@@ -750,7 +794,7 @@ PRINT 'Step 5: booking staging (set-based)';
 
 IF OBJECT_ID('dbo.stg_gen_booking', 'U') IS NOT NULL DROP TABLE dbo.stg_gen_booking;
 CREATE TABLE dbo.stg_gen_booking (
-    n BIGINT NOT NULL,
+    n BIGINT NOT NULL CONSTRAINT pk_stg_gen_booking PRIMARY KEY CLUSTERED,
     requester_id INT NOT NULL,
     space_code VARCHAR(50) NOT NULL,
     requested_start_time DATETIME2 NOT NULL,
@@ -791,24 +835,24 @@ SELECT
     CASE WHEN sv.status IN ('approved', 'rejected')
          THEN DATEADD(HOUR, -3, src.req_start) END AS decision_time,
     CASE WHEN sv.status IN ('approved', 'rejected')
-         THEN CASE WHEN sv.status = 'approved' THEN 'Duyet yeu cau dat phong'
-                   ELSE 'Khong duyet yeu cau dat phong' END END AS decision_note,
+         THEN CASE WHEN sv.status = 'approved' THEN 'Approved after space and schedule review.'
+                   ELSE 'Request declined after space and schedule review.' END END AS decision_note,
     CASE WHEN sv.status = 'rejected'
          THEN CASE src.h_cancel % 5
-                  WHEN 0 THEN 'Phong da co lich su dung'
-                  WHEN 1 THEN 'Thoi gian yeu cau vuot qua gio hanh chinh'
-                  WHEN 2 THEN 'Hoat dong khong phu hop voi loai phong'
-                  WHEN 3 THEN 'Thong tin yeu cau chua day du'
-                  ELSE 'So nguoi tham gia vuot suc chua' END END AS rejection_reason,
+                  WHEN 0 THEN 'The room is already reserved for this time.'
+                  WHEN 1 THEN 'The requested time falls outside permitted hours.'
+                  WHEN 2 THEN 'The activity is not suitable for this room type.'
+                  WHEN 3 THEN 'The booking request is missing required details.'
+                  ELSE 'Expected attendance exceeds room capacity.' END END AS rejection_reason,
     CASE WHEN sv.status IN ('checked_in', 'completed')
          THEN DATEADD(MINUTE, 5 + (src.h_minutes % 10), src.req_start) END AS actual_start_time,
     CASE WHEN sv.status IN ('checked_in', 'completed') THEN cs.user_id END AS check_in_staff_id,
-    CASE WHEN sv.status IN ('checked_in', 'completed') THEN 'Phong sach se, thiet bi day du' END AS initial_condition,
+    CASE WHEN sv.status IN ('checked_in', 'completed') THEN 'Room clean; lighting, furniture, and presentation equipment checked.' END AS initial_condition,
     CASE WHEN sv.status = 'completed'
          THEN DATEADD(MINUTE, 5 + (src.h_minutes % 10), src.req_end) END AS actual_end_time,
     CASE WHEN sv.status = 'completed' THEN cs.user_id END AS completion_staff_id,
-    CASE WHEN sv.status = 'completed' THEN 'Ban giao lai, tinh trang tot' END AS final_condition,
-    CASE WHEN sv.status = 'completed' THEN 'Su dung dung muc dich da dang ky' END AS usage_notes
+    CASE WHEN sv.status = 'completed' THEN 'Room returned in good condition; equipment powered down.' END AS final_condition,
+    CASE WHEN sv.status = 'completed' THEN 'Space used for the approved purpose with no incidents reported.' END AS usage_notes
 FROM (
     SELECT
         n,
@@ -886,6 +930,10 @@ CROSS APPLY (
 DECLARE @StagedBookings BIGINT = (SELECT COUNT_BIG(*) FROM dbo.stg_gen_booking);
 PRINT '  staged bookings: ' + CAST(@StagedBookings AS VARCHAR(20));
 
+CREATE NONCLUSTERED INDEX ix_stg_gen_booking_space_time
+    ON dbo.stg_gen_booking (space_code, requested_start_time, requested_end_time)
+    INCLUDE (booking_status);
+
 -- ============================================================================
 -- 6. PRE-LOAD VALIDATION (staged rows)
 -- ============================================================================
@@ -939,16 +987,20 @@ IF EXISTS (SELECT 1 FROM dbo.stg_gen_booking
            HAVING COUNT_BIG(*) > 1)
     THROW 53019, 'Staged bookings contain a duplicate space/time slot.', 1;
 
+-- A window check is linear after ordering and avoids the very expensive
+-- inequality self-join that previously made a 100,000-row run appear stalled.
 IF EXISTS (
     SELECT 1
-    FROM dbo.stg_gen_booking a
-    JOIN dbo.stg_gen_booking b
-      ON a.space_code = b.space_code
-     AND a.n < b.n
-     AND a.booking_status = 'approved'
-     AND b.booking_status = 'approved'
-     AND a.requested_start_time < b.requested_end_time
-     AND a.requested_end_time > b.requested_start_time
+    FROM (
+        SELECT requested_start_time,
+               MAX(requested_end_time) OVER (
+                   PARTITION BY space_code ORDER BY requested_start_time
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+               ) AS previous_end_time
+        FROM dbo.stg_gen_booking
+        WHERE booking_status = 'approved'
+    ) approved_schedule
+    WHERE previous_end_time > requested_start_time
 )
     THROW 53020, 'Staged approved bookings overlap within a space.', 1;
 
@@ -972,6 +1024,7 @@ PRINT '  staged validation: PASS';
 PRINT 'Step 7: bulk loading bookings in batches of ' + CAST(@BatchSize AS VARCHAR(10));
 
 DECLARE @Offset BIGINT = 0;
+DECLARE @RowsInserted INT;
 
 BEGIN TRY
     ALTER TABLE dbo.BOOKING DISABLE TRIGGER trg_booking_enforce_rules;
@@ -997,8 +1050,12 @@ BEGIN TRY
         OFFSET @Offset ROWS
         FETCH NEXT @BatchSize ROWS ONLY;
 
-        SET @Offset = @Offset + @BatchSize;
-        PRINT '    loaded ' + CAST(@Offset AS VARCHAR(20)) + ' bookings';
+        SET @RowsInserted = @@ROWCOUNT;
+        IF @RowsInserted = 0
+            THROW 53025, 'Bulk booking load stopped before reaching BookingCount.', 1;
+
+        SET @Offset = @Offset + @RowsInserted;
+        RAISERROR ('    loaded %I64d of %d bookings', 10, 1, @Offset, @BookingCount) WITH NOWAIT;
     END;
 
     ALTER TABLE dbo.BOOKING ENABLE TRIGGER trg_booking_enforce_rules;
@@ -1029,8 +1086,7 @@ JOIN dbo.MAINTENANCE_RECORD m
  AND m.status IN ('reported', 'in_progress')
  AND b.requested_start_time < COALESCE(m.completion_time, CONVERT(DATETIME2, '9999-12-31'))
  AND b.requested_end_time > m.start_time
-WHERE EXISTS (SELECT 1 FROM dbo.[USER] u
-              WHERE u.user_id = b.requester_id AND u.email LIKE 'gen-%@campus.example')
+WHERE b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker)
   AND NOT EXISTS (SELECT 1 FROM dbo.ACKNOWLEDGEMENT a
                   WHERE a.booking_id = b.booking_id AND a.maintenance_id = m.maintenance_id);
 
@@ -1049,9 +1105,18 @@ IF EXISTS (SELECT 1 FROM sys.triggers
 IF EXISTS (SELECT 1 FROM dbo.BOOKING b
            LEFT JOIN dbo.[USER] u ON u.user_id = b.requester_id
            LEFT JOIN dbo.SPACE s ON s.space_code = b.space_code
-           WHERE b.requester_id >= @FirstGenUserId
+           WHERE b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker)
              AND (u.user_id IS NULL OR s.space_code IS NULL))
     THROW 53031, 'Generated booking has an orphan reference.', 1;
+
+DECLARE @LoadedBookingCount BIGINT = (
+    SELECT COUNT_BIG(*)
+    FROM dbo.BOOKING b
+    WHERE b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker)
+);
+
+IF @LoadedBookingCount <> @BookingCount
+    THROW 53035, 'Loaded generated booking count does not match BookingCount.', 1;
 
 IF EXISTS (
     SELECT 1
@@ -1077,11 +1142,24 @@ IF NOT EXISTS (
 )
     THROW 53034, 'Generated policies have no department restrictions.', 1;
 
+-- Exact generated-entity counts. Counts exclude retained demonstration rows.
+SELECT entity_name, generated_count, expected_count
+FROM (VALUES
+    ('USER', CAST((SELECT COUNT_BIG(*) FROM dbo.gen_user_marker) AS BIGINT), CAST(@UserCount AS BIGINT)),
+    ('SPACE', CAST((SELECT COUNT_BIG(*) FROM dbo.gen_space_marker) AS BIGINT), CAST(@SpaceCount AS BIGINT)),
+    ('FACILITY', CAST((SELECT COUNT_BIG(*) FROM dbo.gen_facility_marker) AS BIGINT), CAST(@FacilityCount AS BIGINT)),
+    ('USAGE_POLICY', CAST((SELECT COUNT_BIG(*) FROM dbo.gen_policy_marker) AS BIGINT), CAST(@PolicyCount AS BIGINT)),
+    ('SEMESTER', CAST(@GeneratedSemesterCount AS BIGINT), CAST(@AcademicYearCount * 2 AS BIGINT)),
+    ('MAINTENANCE_RECORD', CAST((SELECT COUNT_BIG(*) FROM dbo.gen_maintenance_marker) AS BIGINT), CAST(@SpaceCount * 4 AS BIGINT)),
+    ('BOOKING', @LoadedBookingCount, CAST(@BookingCount AS BIGINT))
+) summary(entity_name, generated_count, expected_count)
+ORDER BY entity_name;
+
 SELECT booking_status, COUNT_BIG(*) AS cnt,
        CAST(100.0 * COUNT_BIG(*) / SUM(COUNT_BIG(*)) OVER () AS DECIMAL(5,2)) AS pct
 FROM dbo.BOOKING b
 JOIN dbo.[USER] u ON u.user_id = b.requester_id
-WHERE u.email LIKE 'gen-%@campus.example'
+WHERE u.user_id IN (SELECT user_id FROM dbo.gen_user_marker)
 GROUP BY booking_status
 ORDER BY booking_status;
 
@@ -1090,7 +1168,7 @@ SELECT MIN(requested_start_time) AS first_booking,
        DATEDIFF(DAY, MIN(requested_start_time), MAX(requested_start_time)) AS day_span
 FROM dbo.BOOKING b
 JOIN dbo.[USER] u ON u.user_id = b.requester_id
-WHERE u.email LIKE 'gen-%@campus.example';
+WHERE u.user_id IN (SELECT user_id FROM dbo.gen_user_marker);
 
 SELECT m.impact_level, m.status, COUNT_BIG(*) AS cnt
 FROM dbo.MAINTENANCE_RECORD m
@@ -1111,49 +1189,6 @@ GROUP BY p.policy_id, p.policy_name
 ORDER BY p.policy_name;
 
 PRINT 'High-volume generation complete.';
-
--- ----------------------------------------------------------------------------
--- 10. FINAL EMAIL FINALIZATION - realistic HCMVNU addresses
---   Primary    : <surname-initial><middle-initial><given><user_id>@hcmus.edu.vn
---                e.g. "lgphuc42@hcmus.edu.vn"
---   Fallback   : used only if the primary address is already taken
---                <semester><department><sequence>@hcmus.edu.vn
---                e.g. "24010042@hcmus.edu.vn"  (semester 24, dept 01, no. 0042)
---   Cleanup on future re-runs relies on dbo.gen_user_marker, since both
---   e-mail and phone are now real and cannot act as markers.
--- ----------------------------------------------------------------------------
-PRINT 'Step 10: finalize real email addresses';
-
-IF OBJECT_ID('tempdb..#final_user_email') IS NOT NULL DROP TABLE #final_user_email;
-WITH src AS (
-    SELECT um.user_id,
-           s.user_idx,
-           s.email_local,
-           ((s.user_idx % 10) + 1) AS dept_no
-    FROM dbo.stg_gen_user s
-    JOIN #user_map um ON um.user_idx = s.user_idx
-)
-SELECT user_id,
-       LOWER(email_local) + CAST(user_id AS VARCHAR(10)) + '@hcmus.edu.vn' AS primary_email,
-       '24'
-         + RIGHT('00' + CAST(dept_no AS VARCHAR(2)), 2)
-         + RIGHT('0000' + CAST(ROW_NUMBER() OVER (PARTITION BY dept_no ORDER BY user_id) AS VARCHAR(4)), 4)
-         + '@hcmus.edu.vn' AS fallback_email
-INTO #final_user_email
-FROM src;
-
--- Apply primary address unless the primary address is already taken
-UPDATE u
-SET u.email = CASE WHEN NOT EXISTS (
-                        SELECT 1 FROM dbo.[USER] x
-                        WHERE x.user_id <> u.user_id AND x.email = f.primary_email)
-                   THEN f.primary_email
-                   ELSE f.fallback_email END
-FROM dbo.[USER] u
-JOIN #final_user_email f ON f.user_id = u.user_id
-WHERE EXISTS (SELECT 1 FROM dbo.gen_user_marker m WHERE m.user_id = u.user_id);
-
-PRINT 'Generated user addresses use @hcmus.edu.vn.';
 
 -- ============================================================================
 -- cleanup of staging tables
