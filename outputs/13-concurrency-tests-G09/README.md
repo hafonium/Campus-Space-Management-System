@@ -2,11 +2,11 @@
 
 ## Three scenarios
 
-| # | Demo | Cơ chế | Kết quả |
-|---|------|--------|---------|
-| **1** | **Unsafe** | Trigger DISABLED, raw UPDATE không lock | CẢ 2 approved → write-skew **CONFIRMED** |
+| # | Demo | Mechanism | Result |
+|---|------|-----------|--------|
+| **1** | **Unsafe** | Trigger DISABLED, raw UPDATE without locks | BOTH approved → write-skew **CONFIRMED** |
 | **2** | **Safe (conflict)** | Trigger ENABLED, `sp_approve_booking` (SERIALIZABLE + UPDLOCK) | 1 approved, 1 fail 50000 → **PREVENTED** |
-| **3** | **Safe (non-conflict)** | Trigger ENABLED, disjoint times | CẢ 2 approved → **no false blocking** |
+| **3** | **Safe (non-conflict)** | Trigger ENABLED, disjoint times | BOTH approved → **no false blocking** |
 
 ## Files
 
@@ -48,11 +48,11 @@ Run Session A first, then **immediately** switch tabs and run Session B.
 ### Unsafe Demo (watch the write-skew happen)
 
 ```
-Tab A: 01a-demo-conflict-setup.sql                   → F5 (1 lần)
+Tab A: 01a-demo-conflict-setup.sql                   → F5 (once)
 Tab A: 01b-session-A-unsafe.sql                      → F5
-       → In ra: "Run Session B NOW (within 10 seconds)"
-Tab B: 01c-session-B-unsafe.sql                      → F5 (trong vòng 10s)
-       → A & B đều SUCCEEDED
+       → Prints: "Run Session B NOW (within 10 seconds)"
+Tab B: 01c-session-B-unsafe.sql                      → F5 (within 10s)
+       → A & B both SUCCEEDED
 Tab A: 01d-demo-conflict-verify.sql                  → F5
        → CONFLICT CONFIRMED: Both bookings approved!
 ```
@@ -61,9 +61,9 @@ Tab A: 01d-demo-conflict-verify.sql                  → F5
 
 ```
 Tab A: 02a-session-A-safe.sql                        → F5
-       → In ra: "Run Session B NOW (within 10 seconds)"
-Tab B: 02b-session-B-safe.sql                        → F5 (trong vòng 10s)
-       → B bị block, sau đó fail — Msg 50000
+       → Prints: "Run Session B NOW (within 10 seconds)"
+Tab B: 02b-session-B-safe.sql                        → F5 (within 10s)
+       → B is blocked, then fails — Msg 50000
 Tab A: 02c-safe-verify.sql                           → F5
        → PREVENTION WORKS: 1 approved + 1 pending
 ```
@@ -72,9 +72,9 @@ Tab A: 02c-safe-verify.sql                           → F5
 
 ```
 Tab A: 03a-session-A-safe-nonconflict.sql            → F5
-       → In ra: "Run Session B NOW (within 5 seconds)"
-Tab B: 03b-session-B-safe-nonconflict.sql            → F5 (trong vòng 5s)
-       → Cả 2 SUCCEEDED (disjoint times, no blocking)
+       → Prints: "Run Session B NOW (within 5 seconds)"
+Tab B: 03b-session-B-safe-nonconflict.sql            → F5 (within 5s)
+       → Both SUCCEEDED (disjoint times, no blocking)
 Tab A: 03c-safe-nonconflict-verify.sql               → F5
        → NO FALSE BLOCKING: Both approved
 ```
