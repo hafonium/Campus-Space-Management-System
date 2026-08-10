@@ -61,7 +61,7 @@ SET DATEFIRST 1;
 -- ============================================================================
 -- 0. GENERATION PARAMETERS
 -- ============================================================================
-DECLARE @BookingCount INT        = 100000;  -- valid range 100000 .. 500000
+DECLARE @BookingCount INT        = 500000;  -- valid range 100000 .. 500000
 DECLARE @Seed INT                = 9009;    -- deterministic seed
 DECLARE @FirstAcademicYear INT   = 2023;    -- academic year start (Sep 1)
 DECLARE @AcademicYearCount INT   = 3;       -- minimum 3 complete academic years

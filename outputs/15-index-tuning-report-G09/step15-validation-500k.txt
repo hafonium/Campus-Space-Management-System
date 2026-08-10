@@ -1,0 +1,26 @@
+Changed database context to 'CampusSpaceManagementSystem'.
+Dataset preflight passed.
+CampusSpaceManagementSystem 16.0.4265.3 Developer Edition (64-bit) 160 FULL
+500022 500000 72861 378635 2023-09-01 08:00:00.0000000 2026-09-21 16:00:00.0000000 1116
+130 43 485 6
+BOOKING pk_booking CLUSTERED 1 0
+FACILITY pk_facility CLUSTERED 1 0
+MAINTENANCE_RECORD pk_maintenance_record CLUSTERED 1 0
+SEMESTER pk_semester CLUSTERED 1 0
+SEMESTER uq_semester_semester_name NONCLUSTERED 1 0
+SPACE pk_space CLUSTERED 1 0
+SPACE uq_space_location NONCLUSTERED 1 0
+FACILITY leading-key inventory passed: no other space_code-leading index; C4 will be benchmarked.
+Candidate-name safety passed.
+C1: ix_booking_overlap_lock BOOKING 0 0
+C2: ix_g09_booking_semester_reporting BOOKING 0 0
+C3: ix_g09_maintenance_room_finder MAINTENANCE_RECORD 0 0
+C4: ix_g09_facility_space FACILITY 0 0
+Warning: Null value is eliminated by an aggregate or other SET operation.
+W1 CR-M3-1006 2026-07-10 10:00:00.0000000 2026-07-10 12:00:00.0000000
+W2 AUD-MC-1000 500 2026-09-22 18:00:00.0000000 2026-09-22 20:00:00.0000000 1
+1
+3
+W3/W4 1 59022
+Canonical workload compilation and deterministic parameter validation passed.
+VALIDATION ONLY COMPLETE. Set @ExecuteFullBenchmark = 1 for the controlled full run.

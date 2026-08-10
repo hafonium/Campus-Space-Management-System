@@ -1,121 +1,135 @@
 # Benchmark Analysis Reference
 
-Use this reference only after real SQL Server benchmark output is available.
+Use only real SQL Server benchmark evidence.
 
 ## Purpose
 
-Answer:
-
-1. What actually changed?
-2. Which index did the optimizer actually use?
-3. Was the improvement large enough to justify keeping the index?
-
-Do not infer measurements that are missing.
+Determine which access paths actually changed and whether each tested index is
+worth its recurring cost.
 
 ---
 
-## 1. Parse all measured runs
+## 1. Parse measured runs
 
-For every W1–W4:
+For W1–W4 collect all five BASE and five INDEXED measured runs.
 
-Extract all five BASE and all five INDEXED runs.
-
-Collect:
+Extract:
 
 - per-table logical reads;
-- total reads where useful;
+- total logical reads where useful;
 - CPU time;
 - elapsed time.
 
-Use query-level timing records.
+Exclude warm-up and plan-capture executions.
 
-Do not count duplicate outer `sp_executesql` timing records.
+Use query-level timing. Ignore duplicate outer `sp_executesql` timing records if
+present.
 
-Use the median of the five measured runs.
+Use medians.
 
 ---
 
-## 2. Prefer stable evidence
+## 2. Evidence priority
 
-Evidence priority:
+Prefer:
 
 1. logical reads;
-2. Actual Rows Read / pages accessed;
-3. actual index and physical operator;
-4. median CPU;
-5. median elapsed time;
-6. table size and write/storage overhead.
+2. Actual Rows Read;
+3. actual index/operator;
+4. Key Lookup presence;
+5. median CPU;
+6. median elapsed;
+7. table size and write/storage cost.
 
-Timing is useful but noisy.
-Logical reads and actual row/page access are usually more stable.
+Timing is noisier than IO/row-access evidence.
+
+`0 ms` means below displayed timer resolution, not literal zero cost.
 
 ---
 
-## 3. Read Actual Plans
+## 3. Actual Plan attribution
 
-For BASE and INDEXED identify:
+For each workload identify:
 
-- `Clustered Index Scan`;
-- `Index Scan`;
-- `Index Seek`;
-- join strategy;
-- aggregate strategy;
-- Key Lookup;
+- Scan/Seek operator;
 - actual index name;
-- Actual Rows Read;
-- Actual Rows.
+- Actual Rows Read vs Actual Rows;
+- joins/aggregates where relevant;
+- Key Lookup.
 
-Do not say an index helped a workload merely because that index existed.
+Do not credit an index merely because it existed in INDEXED phase.
 
-Use the plan to identify the index SQL Server actually selected.
-
----
-
-## 4. Correct attribution
-
-Candidate intent is not optimizer evidence.
-
-Example principle:
-
-If C2 was designed for semester reporting but W3's Actual Plan uses C1, then W3 improvement belongs to C1.
-
-Write:
-
-> W3 benefited from C1; W3 provides no direct evidence for C2.
-
-Do not rewrite history to make the original candidate plan appear correct.
+If a workload improves while the optimizer uses another candidate, attribute the
+benefit to the index actually selected.
 
 ---
 
-## 5. Do not equate Seek with good
+## 4. W2 must be decomposed
 
-A plan change:
+Because W2 touches several tables, report separately when material:
 
-`Scan -> Seek`
+- SPACE reads;
+- FACILITY reads;
+- BOOKING reads;
+- MAINTENANCE_RECORD reads;
+- total reads.
 
-is not sufficient.
+This is now especially important because the 1:N schema may introduce a
+`FACILITY(space_code)` candidate.
 
-Ask:
+If C4 is tested:
 
-- how many logical reads were saved?
-- how many rows/pages were avoided?
-- how large is the table?
-- how often is the workload executed?
-- what write/storage overhead does the index add?
-
-A seek on a tiny table may have negligible practical value.
+- verify whether the W2 plan actually uses it;
+- compare FACILITY reads/rows;
+- consider FACILITY table size;
+- do not KEEP it just because a Seek appears.
 
 ---
 
-## 6. Defense record
+## 5. W3/W4 query-shape check
 
-For each candidate create:
+Before interpreting C2, confirm the benchmark really executed the current Step 16
+functions/query bodies using `@semester_id`.
+
+If the benchmark replaced them with precomputed semester start/end parameters,
+treat the result as a different experiment, not authoritative evidence for the
+production workload.
+
+---
+
+## 6. Decision logic
+
+### KEEP
+
+Material, repeatable benefit on an important workload justifies storage/write
+maintenance.
+
+### MODIFY
+
+The idea is useful, but key order/INCLUDE width/duplication can improve.
+
+### REJECT / DEFER
+
+Use when:
+
+- optimizer does not use it;
+- benefit is trivial;
+- table is too small;
+- another index already supplies the useful path;
+- recurring write/storage cost outweighs the gain.
+
+A Scan-to-Seek change by itself is never enough.
+
+---
+
+## 7. Candidate defense record
+
+For every tested candidate:
 
 ```yaml
 candidate: C?
-
 why_chosen:
-  - query/access-pattern rationale
+  - access-pattern rationale
 
 observed_usage:
   W1: ...
@@ -124,93 +138,19 @@ observed_usage:
   W4: ...
 
 evidence:
-  - reads before -> after
-  - rows read before -> after
-  - plan before -> after
-  - median CPU
-  - median elapsed
+  logical_reads: ...
+  actual_rows_read: ...
+  plan: ...
+  cpu_median: ...
+  elapsed_median: ...
 
 cost:
-  - write maintenance
-  - storage
-  - overlap with existing indexes
+  storage: ...
+  write_maintenance: ...
+  overlap_with_other_indexes: ...
 
-decision:
-  KEEP | MODIFY | REJECT / DEFER
+decision: KEEP | MODIFY | REJECT / DEFER
 ```
-
-This record directly answers:
-
-- Why did we choose this candidate?
-- How do we know whether it is good?
-
----
-
-## 7. Decision logic
-
-### KEEP
-
-Use when evidence shows material workload benefit and the cost is justified.
-
-### MODIFY
-
-Use when the candidate concept is useful but:
-
-- key order should change;
-- INCLUDE columns should change;
-- it duplicates another index;
-- a narrower reusable index could serve the same purpose.
-
-### REJECT / DEFER
-
-Use when:
-
-- optimizer does not use it;
-- measured benefit is trivial;
-- table is too small for the gain to matter;
-- write/storage cost outweighs benefit;
-- another existing index already provides the useful access path.
-
----
-
-## 8. Important interpretations
-
-### W1
-
-A strong result typically shows the overlap query moving from broad BOOKING access to targeted access through C1.
-
-Explain with reads/rows, not just the word `Seek`.
-
-### W2
-
-Separate:
-
-- BOOKING reads;
-- maintenance reads;
-- total query reads.
-
-If most improvement comes from C1, say so.
-
-Do not over-credit C3 if maintenance is tiny.
-
-### W3
-
-Check which index is actually selected.
-Do not assume C2.
-
-### W4
-
-Check whether the semester-reporting candidate is used and whether it avoids extra lookups.
-
----
-
-## 9. Zero millisecond results
-
-If SQL Server reports `0 ms`, state:
-
-> below displayed millisecond timer resolution
-
-Do not claim literal zero execution cost.
 
 ---
 
@@ -218,9 +158,10 @@ Do not claim literal zero execution cost.
 
 Analysis is complete only when:
 
-- all five runs were considered;
-- medians are computed;
+- all measured runs are accounted for;
+- medians are correct;
+- current production query shape is confirmed;
 - actual optimizer choices are identified;
-- candidate attribution is correct;
-- trade-offs are included;
-- no measurement was fabricated.
+- multi-table W2 attribution is separated;
+- trade-offs are explicit;
+- no measurement is invented.

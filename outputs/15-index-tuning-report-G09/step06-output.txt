@@ -1,0 +1,2 @@
+Changed database context to 'CampusSpaceManagementSystem'.
+Sample data generation complete.

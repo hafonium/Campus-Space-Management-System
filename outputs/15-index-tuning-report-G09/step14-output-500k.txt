@@ -1,0 +1,80 @@
+Changed database context to 'CampusSpaceManagementSystem'.
+Step 1: cleanup of previously generated rows
+Step 2: scheduling calendar
+  Calendar: 2023-09-01 .. 2026-09-22  weekdays=797  spaces=120
+  semesters ensured: 6
+Step 3.1: usage policies
+Step 3.2: role-usage-policy links
+Step 3.3: spaces
+Step 3.4: facilities
+Step 3.5: users
+Step 4: maintenance records
+Step 5: booking staging (set-based)
+  staged bookings: 500000
+Step 6: pre-load validation
+  staged validation: PASS
+Step 7: bulk loading bookings in batches of 25000
+  dbo.trg_booking_enforce_rules DISABLED for bulk load
+    loaded 25000 of 500000 bookings
+    loaded 50000 of 500000 bookings
+    loaded 75000 of 500000 bookings
+    loaded 100000 of 500000 bookings
+    loaded 125000 of 500000 bookings
+    loaded 150000 of 500000 bookings
+    loaded 175000 of 500000 bookings
+    loaded 200000 of 500000 bookings
+    loaded 225000 of 500000 bookings
+    loaded 250000 of 500000 bookings
+    loaded 275000 of 500000 bookings
+    loaded 300000 of 500000 bookings
+    loaded 325000 of 500000 bookings
+    loaded 350000 of 500000 bookings
+    loaded 375000 of 500000 bookings
+    loaded 400000 of 500000 bookings
+    loaded 425000 of 500000 bookings
+    loaded 450000 of 500000 bookings
+    loaded 475000 of 500000 bookings
+    loaded 500000 of 500000 bookings
+  dbo.trg_booking_enforce_rules ENABLED
+Step 8: advisory acknowledgement links
+  acknowledgement links: 530628
+Step 9: post-load validation
+BOOKING 500000 500000
+FACILITY 12 12
+MAINTENANCE_RECORD 480 480
+SEMESTER 6 6
+SPACE 120 120
+USAGE_POLICY 12 12
+USER 5000 5000
+approved 72856 14.57
+cancelled 31708 6.34
+checked_in 71860 14.37
+completed 233906 46.78
+no_show 14992 3.00
+pending 56328 11.27
+rejected 18350 3.67
+2023-09-01 08:00:00.0000000 2026-09-21 16:00:00.0000000 1116
+advisory in_progress 120
+advisory reported 120
+out-of-service completed 120
+out-of-service in_progress 120
+Fall 2023-2024 2023-09-01 2024-01-15
+Winter 2024-2024 2024-02-15 2024-06-30
+Fall 2024-2025 2024-09-01 2025-01-15
+Winter 2025-2025 2025-02-15 2025-06-30
+Fall 2025-2026 2025-09-01 2026-01-15
+Winter 2026-2026 2026-02-15 2026-06-30
+After-Hours Access Policy 0
+Business Hours Access Policy 1
+Computer Lab Use Policy 1
+Examination Room Policy 1
+Group Study Policy 0
+Lecture Hall Use Policy 0
+Meeting Room Use Policy 1
+Project Lab Safety Policy 0
+Seminar and Event Policy 0
+Standard Room Booking Policy 0
+Student Activity Policy 1
+Weekend Space Use Policy 1
+High-volume generation complete.
+Generated-row marker tables retained for safe reruns.
