@@ -48,7 +48,6 @@ Each distinct Phase 1 `SPACE.usage_policy` value is inserted into `USAGE_POLICY.
 ## 2. Affected Relationships
 The extraction of usage policies and the addition of acknowledgements require new structural relationships:
 
-*   **`SPACE`(OPTIONAL) and `FACILITY` (OPTIONAL)** : Change the cardinality of this relationship from Many-to-Many (**M:N**) to One-to-Many   (**1-N**) to present unique facility (every facility even the same type should be unique). A space might have 0 or multiple facilities, but each facility should belong to at most one space. 
 *   **`SPACE` (OPTIONAL) and `USAGE_POLICY` (OPTIONAL)** : Introduce a Many-to-One (**N:1**) relationship. A space can have 0 or 1 usage policy, and a specific usage policy can be applied to 0 or multiple spaces.
 
 *   **`ACKNOWLEDGEMENT` (MANDATORY) and `MAINTENANCE_RECORD` (OPTIONAL)**: Introduce a Many-to-One (**N:1**) relationship. An acknowledgement belong to a maintenance record, and a maintenance record can have 0 or multiple acknowledgements.
@@ -63,8 +62,10 @@ The extraction of usage policies and the addition of acknowledgements require ne
 
 *   **`DEPARTMENT` (OPTIONAL) and `USAGE_POLICY` (OPTIONAL)**: Introduce a Many-to-Many (**M:N**) relationship, resolved by `DEPARTMENT_USAGE_POLICY` in the logical schema. A policy may allow zero or many departments, and a department may be allowed by zero or many policies.
 
-## 3. Business Rules
+*   **`SPACE`(OPTIONAL) and `FACILITY` (OPTIONAL)** : Change the cardinality of this relationship from Many-to-Many (**M:N**) to One-to-Many   (**1-N**) to present unique facility (every facility even the same type should be unique). A space might have 0 or multiple facilities, but each facility should belong to at most one space (In real-life, the staff should go to each room and add an identify for each facility based on new `facility_id`, which is now applied uniquely for every facility even in the same type)
 
+## 3. Business Rules
+ 
 ### 3.1. Modified Business Rules (Updates from Phase 1)
 *   **Updated Rule 2 (Maintenance Blocks):** A space that is temporarily closed, retired, or under maintenance with an `out-of-service` impact level cannot be booked for any time period that overlaps the maintenance period. However, if the maintenance has an `advisory` impact level, the space can still be booked.
 *   **Updated Rule 9 (Approval Channels):** Booking requests must generally be approved or rejected by facility staff or managers. The exception is for selected space types, where requests that satisfy the usage policy may be approved automatically by the system at submission time (instant booking).
