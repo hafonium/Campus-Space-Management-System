@@ -65,15 +65,25 @@ GO
 -- [New Entity]: ACKNOWLEDGEMENT
 -- Action: Create this entity to store records of users acknowledging advisory 
 -- maintenance warnings during the booking process.
--- (maintenance_id will be linked in Section 2)
+-- (maintenance_record_id will be linked in Section 2)
 -- ----------------------------------------------------------------------------
 IF OBJECT_ID('dbo.ACKNOWLEDGEMENT', 'U') IS NULL
 CREATE TABLE dbo.ACKNOWLEDGEMENT (
     booking_id INT NOT NULL,
-    maintenance_id INT NOT NULL,
+    maintenance_record_id INT NOT NULL,
     acknowledged_at DATETIME2 NULL,
-    CONSTRAINT pk_acknowledgement PRIMARY KEY (booking_id, maintenance_id)
+    CONSTRAINT pk_acknowledgement PRIMARY KEY (booking_id, maintenance_record_id)
 );
+GO
+
+-- Upgrade databases created by an earlier Phase 2 script that used the shorter
+-- maintenance_id name. SQL Server updates dependent key metadata during rename.
+IF COL_LENGTH('dbo.ACKNOWLEDGEMENT', 'maintenance_id') IS NOT NULL
+   AND COL_LENGTH('dbo.ACKNOWLEDGEMENT', 'maintenance_record_id') IS NULL
+    EXEC sys.sp_rename
+        'dbo.ACKNOWLEDGEMENT.maintenance_id',
+        'maintenance_record_id',
+        'COLUMN';
 GO
 
 -- ----------------------------------------------------------------------------
@@ -251,7 +261,66 @@ GO
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- SPACE (OPTIONAL) and USAGE_POLICY (MANDATORY) -> N:1
+-- SPACE (OPTIONAL) and FACILITY (OPTIONAL) -> 1:N
+-- Preserve every Phase 1 SPACE_FACILITY association. For a facility previously
+-- shared by several spaces, retain its original row for the first space and create
+-- a distinct facility row for every additional space, as required by Phase 2.
+-- Facilities with no Phase 1 association remain unassigned (space_code IS NULL).
+-- ----------------------------------------------------------------------------
+IF COL_LENGTH('dbo.FACILITY', 'space_code') IS NULL
+    ALTER TABLE dbo.FACILITY ADD space_code VARCHAR(50) NULL;
+GO
+
+-- facility_name is no longer a candidate key because separate physical facility
+-- instances in different spaces may have the same descriptive name.
+IF OBJECT_ID('dbo.uq_facility_facility_name', 'UQ') IS NOT NULL
+    ALTER TABLE dbo.FACILITY DROP CONSTRAINT uq_facility_facility_name;
+GO
+
+IF OBJECT_ID('dbo.SPACE_FACILITY', 'U') IS NOT NULL
+BEGIN
+    ;WITH ranked_association AS (
+        SELECT sf.facility_id,
+               sf.space_code,
+               ROW_NUMBER() OVER (
+                   PARTITION BY sf.facility_id ORDER BY sf.space_code
+               ) AS association_number
+        FROM dbo.SPACE_FACILITY sf
+    )
+    UPDATE f
+       SET f.space_code = ra.space_code
+    FROM dbo.FACILITY f
+    JOIN ranked_association ra
+      ON ra.facility_id = f.facility_id
+     AND ra.association_number = 1
+    WHERE f.space_code IS NULL;
+
+    ;WITH ranked_association AS (
+        SELECT sf.facility_id,
+               sf.space_code,
+               ROW_NUMBER() OVER (
+                   PARTITION BY sf.facility_id ORDER BY sf.space_code
+               ) AS association_number
+        FROM dbo.SPACE_FACILITY sf
+    )
+    INSERT INTO dbo.FACILITY (facility_name, space_code)
+    SELECT f.facility_name, ra.space_code
+    FROM ranked_association ra
+    JOIN dbo.FACILITY f ON f.facility_id = ra.facility_id
+    WHERE ra.association_number > 1;
+
+    DROP TABLE dbo.SPACE_FACILITY;
+END;
+GO
+
+IF OBJECT_ID('dbo.fk_facility_space', 'F') IS NULL
+ALTER TABLE dbo.FACILITY
+    ADD CONSTRAINT fk_facility_space
+    FOREIGN KEY (space_code) REFERENCES dbo.SPACE(space_code) ON DELETE CASCADE;
+GO
+
+-- ----------------------------------------------------------------------------
+-- SPACE (OPTIONAL) and USAGE_POLICY (OPTIONAL) -> N:1
 -- ----------------------------------------------------------------------------
 IF OBJECT_ID('dbo.fk_space_policy', 'F') IS NULL
 ALTER TABLE dbo.SPACE 
@@ -274,7 +343,7 @@ GO
 IF OBJECT_ID('dbo.fk_ack_maintenance', 'F') IS NULL
 ALTER TABLE dbo.ACKNOWLEDGEMENT 
     ADD CONSTRAINT fk_ack_maintenance 
-    FOREIGN KEY (maintenance_id) REFERENCES dbo.MAINTENANCE_RECORD(maintenance_id)
+    FOREIGN KEY (maintenance_record_id) REFERENCES dbo.MAINTENANCE_RECORD(maintenance_id)
     ON DELETE CASCADE;
 GO
 
@@ -406,6 +475,27 @@ BEGIN
            i.initial_condition, i.actual_end_time, i.completion_staff_id,
            i.final_condition, i.usage_notes
     FROM inserted i;
+
+    -- Only the policy-evaluation path below may create an approval without a
+    -- decision staff member. Callers must submit new candidates as pending.
+    -- Existing system-approved rows may still be edited without inventing a
+    -- staff decision.
+    IF EXISTS (
+        SELECT 1
+        FROM @effective e
+        WHERE e.booking_status = 'approved'
+          AND e.decision_staff_id IS NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM deleted d
+              WHERE d.booking_id = e.booking_id
+                AND d.booking_status = 'approved'
+                AND d.decision_staff_id IS NULL
+          )
+    )
+    BEGIN
+        ;THROW 50000, 'An approval without decision staff must be produced automatically from a pending booking.', 1;
+    END
 
     -- A pending booking is auto-approved when it passes every applicable condition
     -- of the policy attached to its space. NULL criteria mean "no restriction".
@@ -609,7 +699,8 @@ BEGIN
 
     -- Remove acknowledgements that no longer correspond to an active overlapping
     -- advisory (for example after rescheduling), then record all advisories shown at
-    -- booking time. acknowledged_at is non-NULL because the requester was informed.
+    -- booking time. acknowledged_at remains NULL until the requester submits the
+    -- acknowledgement; the application sets the timestamp upon submission.
     DELETE a
     FROM dbo.ACKNOWLEDGEMENT a
     JOIN @affected_booking ab ON ab.booking_id = a.booking_id
@@ -617,7 +708,7 @@ BEGIN
     WHERE NOT EXISTS (
         SELECT 1
         FROM dbo.MAINTENANCE_RECORD mr
-        WHERE mr.maintenance_id = a.maintenance_id
+        WHERE mr.maintenance_id = a.maintenance_record_id
           AND mr.space_code = b.space_code
           AND mr.status IN ('reported', 'in_progress')
           AND mr.impact_level = 'advisory'
@@ -625,8 +716,8 @@ BEGIN
           AND b.requested_end_time > mr.start_time
     );
 
-    INSERT INTO dbo.ACKNOWLEDGEMENT (booking_id, maintenance_id, acknowledged_at)
-    SELECT b.booking_id, mr.maintenance_id, SYSDATETIME()
+    INSERT INTO dbo.ACKNOWLEDGEMENT (booking_id, maintenance_record_id, acknowledged_at)
+    SELECT b.booking_id, mr.maintenance_id, NULL
     FROM @affected_booking ab
     JOIN dbo.BOOKING b ON b.booking_id = ab.booking_id
     JOIN dbo.MAINTENANCE_RECORD mr
@@ -638,7 +729,7 @@ BEGIN
     WHERE NOT EXISTS (
         SELECT 1 FROM dbo.ACKNOWLEDGEMENT a
         WHERE a.booking_id = b.booking_id
-          AND a.maintenance_id = mr.maintenance_id
+          AND a.maintenance_record_id = mr.maintenance_id
     );
 END;
 GO
@@ -654,14 +745,27 @@ AS
 BEGIN
     SET NOCOUNT ON;
 
+    -- Impact can be escalated or downgraded only while maintenance is open.
+    -- THROW in this AFTER trigger rolls the originating update back.
+    IF EXISTS (
+        SELECT 1
+        FROM inserted i
+        JOIN deleted d ON d.maintenance_id = i.maintenance_id
+        WHERE i.impact_level <> d.impact_level
+          AND i.status NOT IN ('reported', 'in_progress')
+    )
+    BEGIN
+        ;THROW 50000, 'Maintenance impact level can change only while the record is open.', 1;
+    END
+
     DELETE a
     FROM dbo.ACKNOWLEDGEMENT a
-    JOIN inserted i ON i.maintenance_id = a.maintenance_id
+    JOIN inserted i ON i.maintenance_id = a.maintenance_record_id
     JOIN deleted d ON d.maintenance_id = i.maintenance_id
     WHERE d.impact_level = 'advisory'
       AND i.impact_level <> 'advisory';
 
-    INSERT INTO dbo.ACKNOWLEDGEMENT (booking_id, maintenance_id, acknowledged_at)
+    INSERT INTO dbo.ACKNOWLEDGEMENT (booking_id, maintenance_record_id, acknowledged_at)
     SELECT b.booking_id, i.maintenance_id, NULL
     FROM inserted i
     JOIN deleted d ON d.maintenance_id = i.maintenance_id
@@ -675,7 +779,7 @@ BEGIN
       AND NOT EXISTS (
           SELECT 1 FROM dbo.ACKNOWLEDGEMENT a
           WHERE a.booking_id = b.booking_id
-            AND a.maintenance_id = i.maintenance_id
+            AND a.maintenance_record_id = i.maintenance_id
       );
 END;
 GO

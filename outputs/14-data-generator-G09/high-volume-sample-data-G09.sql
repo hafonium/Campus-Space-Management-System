@@ -43,6 +43,9 @@ IF OBJECT_ID('dbo.DEPARTMENT', 'U') IS NULL
    OR OBJECT_ID('dbo.SEMESTER', 'U') IS NULL
    OR OBJECT_ID('dbo.DEPARTMENT_USAGE_POLICY', 'U') IS NULL
    OR COL_LENGTH('dbo.USER', 'department_id') IS NULL
+   OR COL_LENGTH('dbo.FACILITY', 'space_code') IS NULL
+   OR COL_LENGTH('dbo.ACKNOWLEDGEMENT', 'maintenance_record_id') IS NULL
+   OR OBJECT_ID('dbo.SPACE_FACILITY', 'U') IS NOT NULL
    OR COL_LENGTH('dbo.USAGE_POLICY', 'department_allowed') IS NOT NULL
 BEGIN
     ;THROW 53003,
@@ -64,6 +67,7 @@ DECLARE @FirstAcademicYear INT   = 2023;    -- academic year start (Sep 1)
 DECLARE @AcademicYearCount INT   = 3;       -- minimum 3 complete academic years
 DECLARE @BatchSize INT           = 25000;   -- bulk-insert batch size
 DECLARE @CalendarTailDays INT    = 21;      -- schedule buffer past the last AY end
+DECLARE @KeepMarkerTables BIT    = 1;       -- 1 = safely rerunnable; 0 = drop tracking tables after success
 
 IF @BookingCount < 100000 OR @BookingCount > 500000
     THROW 53000, 'BookingCount must be between 100000 and 500000.', 1;
@@ -98,7 +102,7 @@ WHERE EXISTS (SELECT 1 FROM dbo.BOOKING b
               WHERE b.booking_id = a.booking_id
                 AND b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker))
    OR EXISTS (SELECT 1 FROM dbo.MAINTENANCE_RECORD m
-              WHERE m.maintenance_id = a.maintenance_id
+              WHERE m.maintenance_id = a.maintenance_record_id
                 AND m.maintenance_id IN (SELECT maintenance_id FROM dbo.gen_maintenance_marker));
 
 -- 1b. ROLE_USAGE_POLICY linked to generated policies
@@ -111,13 +115,7 @@ DELETE dp
 FROM dbo.DEPARTMENT_USAGE_POLICY dp
 WHERE dp.policy_id IN (SELECT policy_id FROM dbo.gen_policy_marker);
 
--- 1d. SPACE_FACILITY for generated spaces or facilities
-DELETE sf
-FROM dbo.SPACE_FACILITY sf
-WHERE sf.space_code IN (SELECT space_code FROM dbo.gen_space_marker)
-   OR sf.facility_id IN (SELECT facility_id FROM dbo.gen_facility_marker);
-
--- 1e. maintenance first, then bookings
+-- 1d. maintenance first, then bookings
 DELETE FROM dbo.MAINTENANCE_RECORD
 WHERE maintenance_id IN (SELECT maintenance_id FROM dbo.gen_maintenance_marker);
 
@@ -126,11 +124,12 @@ FROM dbo.BOOKING b
 WHERE b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker)
    OR b.space_code IN (SELECT space_code FROM dbo.gen_space_marker);
 
--- 1f. parent rows
+-- 1e. parent rows. Delete facilities before their parent spaces; the migrated
+-- schema stores the relationship directly in nullable FACILITY.space_code.
+DELETE FROM dbo.FACILITY WHERE facility_id IN (SELECT facility_id FROM dbo.gen_facility_marker);
 DELETE FROM dbo.SPACE WHERE space_code IN (SELECT space_code FROM dbo.gen_space_marker);
 DELETE FROM dbo.[USER] WHERE user_id IN (SELECT user_id FROM dbo.gen_user_marker);
 DELETE FROM dbo.USAGE_POLICY WHERE policy_id IN (SELECT policy_id FROM dbo.gen_policy_marker);
-DELETE FROM dbo.FACILITY WHERE facility_id IN (SELECT facility_id FROM dbo.gen_facility_marker);
 
 -- clear the markers for the new run
 DELETE FROM dbo.gen_user_marker;
@@ -443,42 +442,31 @@ INSERT INTO dbo.gen_space_marker (space_code)
 SELECT space_code FROM dbo.stg_gen_space;
 
 -- ----------------------------------------------------------------------------
--- 3.4 FACILITY + SPACE_FACILITY
+-- 3.4 FACILITY (each row optionally belongs to one SPACE)
 -- ----------------------------------------------------------------------------
-PRINT 'Step 3.4: facilities and space-facility links';
+PRINT 'Step 3.4: facilities';
 
--- English facility names aligned with 06-sample-data-G09.sql.
-INSERT INTO dbo.FACILITY (facility_name)
-SELECT v.facility_name
-FROM (VALUES ('Document Camera'),('Ceiling Projector'),('Wireless Microphone'),
-             ('Climate Control'),('Interactive Whiteboard'),('Hybrid Meeting Camera'),
-             ('Desktop Workstation'),('Lecture Capture System'),('Assistive Listening System'),
-             ('Charging Station'),('Adjustable Lectern'),('Digital Display')) v(facility_name)
-WHERE NOT EXISTS (SELECT 1 FROM dbo.FACILITY f
-                  WHERE f.facility_name = v.facility_name);
-
--- Track the generated facilities for the next cleanup run.
-INSERT INTO dbo.gen_facility_marker (facility_id)
-SELECT f.facility_id FROM dbo.FACILITY f
-WHERE f.facility_name IN ('Document Camera','Ceiling Projector','Wireless Microphone',
-                          'Climate Control','Interactive Whiteboard','Hybrid Meeting Camera',
-                          'Desktop Workstation','Lecture Capture System','Assistive Listening System',
-                          'Charging Station','Adjustable Lectern','Digital Display');
-
-IF OBJECT_ID('tempdb..#gen_facility') IS NOT NULL DROP TABLE #gen_facility;
-SELECT f.facility_id,
-       ROW_NUMBER() OVER (ORDER BY f.facility_id) AS fac_idx,
-       COUNT(*) OVER () AS fac_count
-INTO #gen_facility
-FROM dbo.FACILITY f
-JOIN dbo.gen_facility_marker m ON m.facility_id = f.facility_id;
-
-INSERT INTO dbo.SPACE_FACILITY (space_code, facility_id)
-SELECT s.space_code, f.facility_id
-FROM dbo.stg_gen_space s
-CROSS JOIN #gen_facility f
-WHERE f.fac_idx = (s.space_idx % f.fac_count) + 1
-   OR f.fac_idx = ((s.space_idx + 3) % f.fac_count) + 1;
+-- A facility is a unique physical instance in Phase 2. Create twelve distinct
+-- rows and assign each to one generated space. OUTPUT tracks only rows created
+-- by this run, so similarly named demonstration facilities are never adopted.
+INSERT INTO dbo.FACILITY (facility_name, space_code)
+OUTPUT INSERTED.facility_id INTO dbo.gen_facility_marker (facility_id)
+SELECT v.facility_name, s.space_code
+FROM (VALUES
+          (0, 'Document Camera'),
+          (1, 'Ceiling Projector'),
+          (2, 'Wireless Microphone'),
+          (3, 'Climate Control'),
+          (4, 'Interactive Whiteboard'),
+          (5, 'Hybrid Meeting Camera'),
+          (6, 'Desktop Workstation'),
+          (7, 'Lecture Capture System'),
+          (8, 'Assistive Listening System'),
+          (9, 'Charging Station'),
+          (10, 'Adjustable Lectern'),
+          (11, 'Digital Display')
+     ) v(facility_idx, facility_name)
+JOIN dbo.stg_gen_space s ON s.space_idx = v.facility_idx;
 
 -- ----------------------------------------------------------------------------
 -- 3.5 USER (staff first for deterministic id band)
@@ -1072,12 +1060,12 @@ END CATCH;
 -- 8. ADVISORY ACKNOWLEDGEMENTS
 --    The bulk load bypassed the trigger's acknowledgement auto-sync, so the
 --    links are created here for every booking overlapping an open advisory
---    maintenance record. ACKNOWLEDGEMENT(booking_id, maintenance_id,
+--    maintenance record. ACKNOWLEDGEMENT(booking_id, maintenance_record_id,
 --    acknowledged_at) is the Phase 2 link model.
 -- ============================================================================
 PRINT 'Step 8: advisory acknowledgement links';
 
-INSERT INTO dbo.ACKNOWLEDGEMENT (booking_id, maintenance_id, acknowledged_at)
+INSERT INTO dbo.ACKNOWLEDGEMENT (booking_id, maintenance_record_id, acknowledged_at)
 SELECT b.booking_id, m.maintenance_id, b.requested_start_time
 FROM dbo.BOOKING b
 JOIN dbo.MAINTENANCE_RECORD m
@@ -1088,7 +1076,8 @@ JOIN dbo.MAINTENANCE_RECORD m
  AND b.requested_end_time > m.start_time
 WHERE b.requester_id IN (SELECT user_id FROM dbo.gen_user_marker)
   AND NOT EXISTS (SELECT 1 FROM dbo.ACKNOWLEDGEMENT a
-                  WHERE a.booking_id = b.booking_id AND a.maintenance_id = m.maintenance_id);
+                  WHERE a.booking_id = b.booking_id
+                    AND a.maintenance_record_id = m.maintenance_id);
 
 DECLARE @AckLinks BIGINT = (SELECT COUNT_BIG(*) FROM dbo.ACKNOWLEDGEMENT);
 PRINT '  acknowledgement links: ' + CAST(@AckLinks AS VARCHAR(20));
@@ -1198,3 +1187,19 @@ DROP TABLE dbo.stg_gen_space;
 DROP TABLE dbo.stg_gen_user;
 DROP TABLE dbo.stg_gen_maintenance;
 DROP TABLE dbo.stg_gen_booking;
+
+-- Marker tables make a future run able to remove only rows created by this
+-- generator. Drop them only after every generation and validation step has
+-- completed successfully and only when rerun support is intentionally disabled.
+IF @KeepMarkerTables = 0
+BEGIN
+    DROP TABLE IF EXISTS dbo.gen_maintenance_marker;
+    DROP TABLE IF EXISTS dbo.gen_facility_marker;
+    DROP TABLE IF EXISTS dbo.gen_space_marker;
+    DROP TABLE IF EXISTS dbo.gen_policy_marker;
+    DROP TABLE IF EXISTS dbo.gen_user_marker;
+
+    PRINT 'Generated-row marker tables dropped; selective cleanup on a future run is unavailable.';
+END
+ELSE
+    PRINT 'Generated-row marker tables retained for safe reruns.';

@@ -11,7 +11,6 @@ To support the new Phase 2 requirements, the database schema must be updated wit
     *   **Action:** Add a new attribute `impact_level`.
     *   **Values:** `out-of-service` or `advisory`.
 *   **`SPACE`**:
-    *   **Action:** Re-evaluate the `space_type` attribute to designate which types are eligible for auto-approval.
     *   **Action:** Extract the `usage_policy` attribute and convert it into a standalone entity.
 *   **`ROLE`** (New Entity):
     *   **Action:** Create this entity to store roles for users and allow `USAGE_POLICY` to have multiple `allowed_roles` 
@@ -25,10 +24,10 @@ To support the new Phase 2 requirements, the database schema must be updated wit
     *   **Action:** Create this entity to manage dynamic rules that determine auto-approval eligibility for spaces.
     *   **Attributes:**
         *   `policy_id`: Unique identifier for the policy.
-        *   `policy_name`: e.g., "Standard Auto-Approve", "Faculty Short Lecture".
+        *   `policy_name`: e.g., "Faculty Short Lecture".
         *   `max_duration_minutes` : The maximum allowed booking length to qualify for auto-approval (e.g., 120 minutes).
-        *   `requires_business_hours`: If `true`, auto-approval only works during standard operating hours.
-        *   `legacy_policy_text`: Nullable copy of the original Phase 1 `SPACE.usage_policy` text. It preserves existing policy data during migration because free-form text cannot be converted reliably into the structured auto-approval conditions. A policy containing this value is not executable until an administrator configures the structured conditions.
+        *   `requires_business_hours`: If `true`, auto-approval only works during standard operating hours. (*Assumption:* Monday-Friday, 08:00 through 17:00)
+        *   `legacy_policy_text`: Nullable copy of the original Phase 1 `SPACE.usage_policy` text. It preserves existing policy data during migration because free-form text cannot be converted reliably into the structured auto-approval conditions. Therefore, users should update new entity `USAGE_POLICY` by themselves.
 *   **`SEMESTER`** (New Entity):
     *   **Action:** Define named academic periods for booking and utilization analysis.
     *   **Attributes:** 
@@ -49,17 +48,18 @@ Each distinct Phase 1 `SPACE.usage_policy` value is inserted into `USAGE_POLICY.
 ## 2. Affected Relationships
 The extraction of usage policies and the addition of acknowledgements require new structural relationships:
 
-*   **`SPACE` (OPTIONAL) and `USAGE_POLICY` (MANDATORY)** : Introduce a Many-to-One (**N:1**) relationship. A space can have 0 or 1 usage policy, and a specific usage policy **MUST** be applied to at least one space.
+*   **`SPACE`(OPTIONAL) and `FACILITY` (OPTIONAL)** : Change the cardinality of this relationship from Many-to-Many (**M:N**) to One-to-Many   (**1-N**) to present unique facility (every facility even the same type should be unique). A space might have 0 or multiple facilities, but each facility should belong to at most one space. 
+*   **`SPACE` (OPTIONAL) and `USAGE_POLICY` (OPTIONAL)** : Introduce a Many-to-One (**N:1**) relationship. A space can have 0 or 1 usage policy, and a specific usage policy can be applied to 0 or multiple spaces.
 
-*   **`ACKNOWLEDGEMENT` (MANDATORY) and `MAINTENANCE_RECORD` (OPTIONAL)**: Introduce a Many-to-One (**N:1**) relationship. An acknowledgement belong to a maintenance record.
+*   **`ACKNOWLEDGEMENT` (MANDATORY) and `MAINTENANCE_RECORD` (OPTIONAL)**: Introduce a Many-to-One (**N:1**) relationship. An acknowledgement belong to a maintenance record, and a maintenance record can have 0 or multiple acknowledgements.
 
-*   **`ACKNOWLEDGEMENT` (MANDATORY) and `BOOKING` (OPTIONAL)**: Introduce Many-to-One (**N:1**) relationship. An acknowledgement must be stored with a booking.
+*   **`ACKNOWLEDGEMENT` (MANDATORY) and `BOOKING` (OPTIONAL)**: Introduce Many-to-One (**N:1**) relationship. An acknowledgement must be stored with a booking, and a booking can have 0 or multiple acknowledgements due to multiple maintenance records of the same space requested by that booking.
 
-*   **`ROLE` (MANDATORY) and `USER` (MANDATORY)**: Introduce a One-to-Many (**1:N**) relationship. A user must have a role and a role must belong to at least one user.
+*   **`ROLE` (MANDATORY) and `USER` (MANDATORY)**: Introduce a One-to-Many (**1:N**) relationship. A user must have a role, and a role must belong to at least one user.
 
-*   **`ROLE` (OPTIONAL) and `USAGE_POLICY` (OPTIONAL)**: Introduce a Many-to-Many (**M:N**) relationship. A usage policy might only allow some specific roles or might not. A role does not have to be listed in a usage policy.
+*   **`ROLE` (OPTIONAL) and `USAGE_POLICY` (OPTIONAL)**: Introduce a Many-to-Many (**M:N**) relationship. A usage policy might only allow some specific roles or might not. A role can or cannot be listed in some users.
 
-*   **`DEPARTMENT` (OPTIONAL) and `USER` (MANDATORY)**: Introduce a One-to-Many (**1:N**) relationship. Each user belongs to exactly one department; a department may have zero or many users.
+*   **`DEPARTMENT` (OPTIONAL) and `USER` (MANDATORY)**: Introduce a One-to-Many (**1:N**) relationship. Each user belongs to exactly one department, and a department may have zero or many users.
 
 *   **`DEPARTMENT` (OPTIONAL) and `USAGE_POLICY` (OPTIONAL)**: Introduce a Many-to-Many (**M:N**) relationship, resolved by `DEPARTMENT_USAGE_POLICY` in the logical schema. A policy may allow zero or many departments, and a department may be allowed by zero or many policies.
 
