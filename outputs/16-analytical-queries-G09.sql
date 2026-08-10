@@ -55,7 +55,6 @@ GO
 -- ----------------------------------------------------------------------------
 
 -- Remove the temporary renamed function from the previous revision.
-DROP FUNCTION IF EXISTS dbo.fn_CountApprovedBookingsByWeekdayHourBySemester;
 DROP FUNCTION IF EXISTS fn_CountApprovedBookingByWeekdayHourAndHourWithGivenSemester;
 GO
 
@@ -197,12 +196,23 @@ DECLARE @test_space_code VARCHAR(50);
 -- Test a period after the generated booking and completed-maintenance history.
 -- Then choose a usable space without open out-of-service maintenance and use
 -- facilities that the selected space actually contains.
-SELECT @start_time = DATEADD(DAY, 1, MAX(event_end))
-FROM (
-    SELECT MAX(requested_end_time) AS event_end FROM dbo.BOOKING
-    UNION ALL
-    SELECT MAX(completion_time) AS event_end FROM dbo.MAINTENANCE_RECORD
-) history;
+DECLARE @latest_booking_end DATETIME2;
+DECLARE @latest_maintenance_end DATETIME2;
+
+SELECT @latest_booking_end = MAX(requested_end_time)
+FROM dbo.BOOKING;
+
+SELECT @latest_maintenance_end = MAX(completion_time)
+FROM dbo.MAINTENANCE_RECORD;
+
+SET @start_time = DATEADD(DAY, 1,
+    CASE
+        WHEN @latest_booking_end IS NULL THEN @latest_maintenance_end
+        WHEN @latest_maintenance_end IS NULL THEN @latest_booking_end
+        WHEN @latest_booking_end >= @latest_maintenance_end THEN @latest_booking_end
+        ELSE @latest_maintenance_end
+    END
+);
 
 IF @start_time IS NULL
     SET @start_time = SYSDATETIME();
