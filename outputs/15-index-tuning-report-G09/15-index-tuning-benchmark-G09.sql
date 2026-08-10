@@ -25,7 +25,7 @@ SET STATISTICS IO OFF;
 SET STATISTICS TIME OFF;
 SET STATISTICS XML OFF;
 
-DECLARE @execute_full_benchmark BIT = 1; -- Change to 1 only at the human execution gate.
+DECLARE @execute_full_benchmark BIT = 0; -- Change to 1 only at the human execution gate.
 
 PRINT 'STEP 15 INDEX-TUNING BENCHMARK G09';
 PRINT CONCAT('Mode: ', CASE WHEN @execute_full_benchmark = 1
@@ -39,10 +39,12 @@ IF OBJECT_ID(N'dbo.BOOKING', N'U') IS NULL
     THROW 51000, 'Preflight failed: dbo.BOOKING does not exist.', 1;
 IF OBJECT_ID(N'dbo.SPACE', N'U') IS NULL
     THROW 51000, 'Preflight failed: dbo.SPACE does not exist.', 1;
-IF OBJECT_ID(N'dbo.SPACE_FACILITY', N'U') IS NULL
-    THROW 51000, 'Preflight failed: dbo.SPACE_FACILITY does not exist.', 1;
 IF OBJECT_ID(N'dbo.FACILITY', N'U') IS NULL
     THROW 51000, 'Preflight failed: dbo.FACILITY does not exist.', 1;
+IF COL_LENGTH(N'dbo.FACILITY', N'space_code') IS NULL
+    THROW 51000, 'Preflight failed: dbo.FACILITY.space_code does not exist.', 1;
+IF OBJECT_ID(N'dbo.SPACE_FACILITY', N'U') IS NOT NULL
+    THROW 51000, 'Preflight failed: obsolete dbo.SPACE_FACILITY still exists.', 1;
 IF OBJECT_ID(N'dbo.MAINTENANCE_RECORD', N'U') IS NULL
     THROW 51000, 'Preflight failed: dbo.MAINTENANCE_RECORD does not exist.', 1;
 IF OBJECT_ID(N'dbo.SEMESTER', N'U') IS NULL
@@ -182,7 +184,7 @@ OUTER APPLY (
 ) AS INC
 WHERE SC.name = N'dbo'
   AND T.name IN (
-      N'BOOKING', N'SPACE', N'SPACE_FACILITY',
+      N'BOOKING', N'SPACE', N'FACILITY',
       N'MAINTENANCE_RECORD', N'SEMESTER'
   )
 ORDER BY T.name, I.index_id;
@@ -391,9 +393,9 @@ WHERE S.capacity >= @p_capacity
       SELECT 1
       FROM (VALUES (@p_facility_1), (@p_facility_2)) AS RF(facility_id)
       WHERE RF.facility_id NOT IN (
-          SELECT SF.facility_id
-          FROM dbo.SPACE_FACILITY SF
-          WHERE SF.space_code = S.space_code
+          SELECT F.facility_id
+          FROM dbo.FACILITY F
+          WHERE F.space_code = S.space_code
       )
   )
 
@@ -592,8 +594,8 @@ FROM dbo.SPACE AS S
 WHERE @w2_start_time IS NOT NULL
   AND S.current_status NOT IN ('temporarily_closed', 'retired')
   AND EXISTS (
-      SELECT 1 FROM dbo.SPACE_FACILITY AS SF
-      WHERE SF.space_code = S.space_code
+      SELECT 1 FROM dbo.FACILITY AS F
+      WHERE F.space_code = S.space_code
   )
   AND NOT EXISTS (
       SELECT 1
@@ -613,8 +615,8 @@ WHERE @w2_start_time IS NOT NULL
         AND ISNULL(MR.completion_time, CONVERT(DATETIME2, '9999-12-31')) > @w2_start_time
   )
 ORDER BY
-    (SELECT COUNT_BIG(*) FROM dbo.SPACE_FACILITY AS SF
-     WHERE SF.space_code = S.space_code) DESC,
+    (SELECT COUNT_BIG(*) FROM dbo.FACILITY AS F
+     WHERE F.space_code = S.space_code) DESC,
     S.space_code;
 
 /* Deterministic fallback: a two-hour interval after all recorded activity. */
@@ -639,8 +641,8 @@ BEGIN
     FROM dbo.SPACE AS S
     WHERE S.current_status NOT IN ('temporarily_closed', 'retired')
       AND EXISTS (
-          SELECT 1 FROM dbo.SPACE_FACILITY AS SF
-          WHERE SF.space_code = S.space_code
+          SELECT 1 FROM dbo.FACILITY AS F
+          WHERE F.space_code = S.space_code
       )
       AND NOT EXISTS (
           SELECT 1
@@ -652,21 +654,21 @@ BEGIN
             AND ISNULL(MR.completion_time, CONVERT(DATETIME2, '9999-12-31')) > @w2_start_time
       )
     ORDER BY
-        (SELECT COUNT_BIG(*) FROM dbo.SPACE_FACILITY AS SF
-         WHERE SF.space_code = S.space_code) DESC,
+        (SELECT COUNT_BIG(*) FROM dbo.FACILITY AS F
+         WHERE F.space_code = S.space_code) DESC,
         S.space_code;
 END;
 
 SELECT
     @w2_facility_count = COUNT(*),
-    @w2_facility_1 = MIN(SF.facility_id)
-FROM dbo.SPACE_FACILITY AS SF
-WHERE SF.space_code = @w2_anchor_space_code;
+    @w2_facility_1 = MIN(F.facility_id)
+FROM dbo.FACILITY AS F
+WHERE F.space_code = @w2_anchor_space_code;
 
-SELECT @w2_facility_2 = MIN(SF.facility_id)
-FROM dbo.SPACE_FACILITY AS SF
-WHERE SF.space_code = @w2_anchor_space_code
-  AND SF.facility_id > @w2_facility_1;
+SELECT @w2_facility_2 = MIN(F.facility_id)
+FROM dbo.FACILITY AS F
+WHERE F.space_code = @w2_anchor_space_code
+  AND F.facility_id > @w2_facility_1;
 
 SET @w2_facility_2_effective = COALESCE(@w2_facility_2, @w2_facility_1);
 

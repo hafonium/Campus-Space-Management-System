@@ -80,7 +80,7 @@ erDiagram
     ROLE }o--o{ USAGE_POLICY : permitted_by
     DEPARTMENT ||--o{ USER : has
     DEPARTMENT }o--o{ USAGE_POLICY : allowed_by
-    USAGE_POLICY o|--|{ SPACE : applied_to
+    USAGE_POLICY o|--o{ SPACE : applied_to
     SPACE o|--o{ FACILITY : contains
     SPACE ||--o{ BOOKING : hosts
     USER ||--o{ BOOKING : submits
@@ -173,7 +173,7 @@ erDiagram
 | USER | 1 : N | MAINTENANCE_RECORD | assigned_to | User optional; MR optional | Each maintenance record may be assigned to at most one staff member; each staff member may be assigned zero or many records. |
 | SPACE | 1 : N | MAINTENANCE_RECORD | undergoes | Space optional; MR mandatory | Each maintenance record must concern exactly one space; each space may undergo zero or many maintenance records. |
 | SPACE | 1 : N | FACILITY | contains | Space optional; Facility optional | Each space may contain zero or many facilities; each facility may exist in at most one space. |
-| USAGE_POLICY | 1 : N | SPACE | applied_to | Policy optional; Space mandatory | A space can have 0 or 1 usage policy, and a specific usage policy must be applied to at least one space. |
+| USAGE_POLICY | 1 : N | SPACE | applied_to | Policy optional; Space optional | Each space may have at most one usage policy, and each usage policy may be applied to zero or many spaces. |
 | ROLE | M : N | USAGE_POLICY | permitted_by | Role optional; Policy optional | A usage policy might only allow some specific roles or might not, and a role does not have to be listed in a usage policy. |
 | DEPARTMENT | 1 : N | USER | has | Department optional; User mandatory | Each user belongs to exactly one department; a department may have zero or many users. |
 | DEPARTMENT | M : N | USAGE_POLICY | allowed_by | Department optional; Policy optional | A policy may allow zero or many departments, and a department may be allowed by zero or many policies. No associated departments means no department restriction. |

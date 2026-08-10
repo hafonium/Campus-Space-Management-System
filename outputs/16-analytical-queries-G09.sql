@@ -110,9 +110,9 @@ RETURN (
             SELECT 1
             FROM @required_facilities RF
             WHERE RF.facility_id NOT IN (
-                SELECT SF.facility_id
-                FROM dbo.SPACE_FACILITY SF
-                WHERE SF.space_code = S.space_code
+                SELECT F.facility_id
+                FROM dbo.FACILITY F
+                WHERE F.space_code = S.space_code
             )
         )
 
@@ -226,10 +226,10 @@ WHERE S.current_status NOT IN ('temporarily_closed', 'retired')
 ORDER BY S.space_code;
 
 INSERT INTO @required_facilities (facility_id)
-SELECT TOP (2) SF.facility_id
-FROM dbo.SPACE_FACILITY SF
-WHERE SF.space_code = @test_space_code
-ORDER BY SF.facility_id;
+SELECT TOP (2) F.facility_id
+FROM dbo.FACILITY F
+WHERE F.space_code = @test_space_code
+ORDER BY F.facility_id;
 
 SELECT *
 FROM dbo.fn_GetAvailableSpaces(
